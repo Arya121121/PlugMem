@@ -91,4 +91,5 @@ export const api = {
       "GET",
       `/graphs/${encodeURIComponent(gid)}/sessions/${encodeURIComponent(sessionId)}`,
     ),
+  getPipelineSpec: () => request("GET", "/pipeline/spec"),
 };

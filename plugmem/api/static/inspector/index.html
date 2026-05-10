@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
   <link id="theme-link" rel="stylesheet" href="themes/default.css">
+  <link rel="stylesheet" href="vendor/xyflow-bundle.css">
 </head>
 <body>
   <header class="topbar">
@@ -36,6 +37,7 @@
     <button class="tab" data-tab="recall" role="tab">Recall trace</button>
     <button class="tab" data-tab="graph" role="tab">Graph</button>
     <button class="tab" data-tab="sessions" role="tab">Sessions</button>
+    <button class="tab" data-tab="pipeline" role="tab">Pipeline</button>
   </nav>
 
   <div id="toast" class="toast" hidden></div>
@@ -186,6 +188,39 @@
             <button id="sessions-detail-close" class="btn btn-ghost" aria-label="Close">×</button>
           </div>
           <div id="sessions-detail-body" class="detail-body"></div>
+        </aside>
+      </section>
+    </section>
+
+    <section id="tab-pipeline" class="tab-panel" role="tabpanel" hidden>
+      <aside class="sidebar pipeline-sidebar">
+        <div class="form-row">
+          <span class="form-label">View</span>
+          <label class="check">
+            <input type="checkbox" id="pipeline-fold-toggle">
+            <span>Fold non-editable steps</span>
+          </label>
+          <div class="hint">Hides compute / embed / storage / branch / loop nodes; contracts edges through them so only LLM and template-render steps remain.</div>
+        </div>
+        <div class="form-row">
+          <span class="form-label">Phases</span>
+          <div id="pipeline-phase-list" class="pipeline-phase-list"></div>
+        </div>
+        <div class="form-row">
+          <span class="form-label">Roles</span>
+          <div id="pipeline-role-legend" class="pipeline-role-legend"></div>
+        </div>
+        <div class="hint">Click any step card to inspect its prompt and bound role. Editing arrives in the next phase.</div>
+      </aside>
+      <section class="content pipeline-content">
+        <div id="pipeline-canvas" class="pipeline-canvas"></div>
+        <div id="pipeline-empty" class="empty pipeline-empty">Loading pipeline…</div>
+        <aside id="pipeline-detail" class="graph-detail-card" hidden>
+          <div class="detail-header">
+            <span id="pipeline-detail-title" class="detail-title"></span>
+            <button id="pipeline-detail-close" class="btn btn-ghost" aria-label="Close">×</button>
+          </div>
+          <div id="pipeline-detail-body" class="detail-body"></div>
         </aside>
       </section>
     </section>

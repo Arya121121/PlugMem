@@ -1,0 +1,621 @@
+// Pipeline tab — exact, accurate xyflow visualization of PlugMem.
+//
+// Renders every LLM call, embedding, compute, storage write, branch, and
+// loop boundary that the production code path actually executes, organised
+// by phase (append / close / insert / retrieve / reason / consolidate).
+//
+// Per-phase layout is computed with dagre; phases are laid out left-to-right.
+// React + xyflow + dagre live in ./vendor/xyflow-bundle.js.
+
+import { api } from "./api.js";
+
+const PHASE_GAP = 120;            // px between phase columns
+const STAGE_OFFSET_Y = 120;       // stage trigger sits above the phase entry
+const NODE_DIMS = {               // [width, height] used by dagre — actual
+  llm:               [280, 200],  // rendered height is css-controlled
+  template_render:   [280, 160],
+  embed:             [240, 100],
+  compute:           [240, 100],
+  storage:           [240, 100],
+  branch:            [300, 130],
+  loop_marker:       [220, 80],
+};
+
+const PER_LABELS = {
+  per_step: "per step",
+  per_trajectory: "per trajectory",
+  per_call: "per call",
+};
+
+const EDITABLE_KINDS = ["llm", "template_render"];
+const ALL_KINDS = ["llm", "template_render", "embed", "compute", "storage", "branch", "loop_marker"];
+
+const KIND_LABELS = {
+  llm: "LLM",
+  template_render: "TEMPLATE",
+  embed: "EMBED",
+  compute: "COMPUTE",
+  storage: "STORAGE",
+  branch: "BRANCH",
+  loop_marker: "LOOP",
+};
+
+let xyflowModP = null;
+async function loadXyflow() {
+  if (!xyflowModP) {
+    xyflowModP = import("./vendor/xyflow-bundle.js");
+  }
+  return xyflowModP;
+}
+
+export function mountPipeline({ container, getGraphId, toast }) {
+  const els = {
+    canvas: container.querySelector("#pipeline-canvas"),
+    empty: container.querySelector("#pipeline-empty"),
+    phaseList: container.querySelector("#pipeline-phase-list"),
+    roleLegend: container.querySelector("#pipeline-role-legend"),
+    detail: container.querySelector("#pipeline-detail"),
+    detailTitle: container.querySelector("#pipeline-detail-title"),
+    detailBody: container.querySelector("#pipeline-detail-body"),
+    detailClose: container.querySelector("#pipeline-detail-close"),
+  };
+
+  let spec = null;
+  let loaded = false;
+  let reactRoot = null;
+  let xyflowMod = null;
+  let visibleKinds = new Set(ALL_KINDS);
+
+  els.detailClose.addEventListener("click", () => {
+    els.detail.hidden = true;
+  });
+
+  const foldToggle = container.querySelector("#pipeline-fold-toggle");
+  if (foldToggle) {
+    foldToggle.addEventListener("change", () => {
+      visibleKinds = foldToggle.checked
+        ? new Set(EDITABLE_KINDS)
+        : new Set(ALL_KINDS);
+      if (xyflowMod && spec) mountReactApp(xyflowMod);
+    });
+  }
+
+  async function load() {
+    if (loaded) return;
+    els.empty.hidden = false;
+    els.empty.textContent = "Loading pipeline…";
+    try {
+      const [s, mod] = await Promise.all([api.getPipelineSpec(), loadXyflow()]);
+      spec = s;
+      xyflowMod = mod;
+      renderSidebar();
+      mountReactApp(mod);
+      els.empty.hidden = true;
+      loaded = true;
+    } catch (err) {
+      els.empty.hidden = false;
+      els.empty.textContent = `Error: ${err.message}`;
+      toast(`pipeline: ${err.message}`, "error");
+    }
+  }
+
+  function renderSidebar() {
+    els.phaseList.innerHTML = "";
+    els.roleLegend.innerHTML = "";
+    for (const phase of spec.phases) {
+      const summary = document.createElement("div");
+      summary.className = "pipeline-phase-summary";
+      const stepCount = spec.steps.filter((s) => s.phase === phase.id).length;
+      const triggeredBy = (phase.triggered_by || []).map((t) => `<code>${escapeHtml(t)}</code>`).join(" ");
+      summary.innerHTML = `
+        <div class="pipeline-phase-summary-head">
+          <strong>${escapeHtml(phase.label)}</strong>
+          <span class="pipeline-phase-count">${stepCount}</span>
+        </div>
+        <div class="hint">${escapeHtml(phase.description)}</div>
+        ${phase.trigger ? `<div class="pipeline-phase-trigger">⚡ ${escapeHtml(phase.trigger)}</div>` : ""}
+        ${triggeredBy ? `<div class="pipeline-phase-triggered-by">${triggeredBy}</div>` : ""}
+      `;
+      els.phaseList.appendChild(summary);
+    }
+    for (const role of spec.roles) {
+      const chip = document.createElement("span");
+      chip.className = "pipeline-role-badge";
+      chip.dataset.role = role;
+      chip.textContent = role;
+      els.roleLegend.appendChild(chip);
+    }
+    if (spec.kinds && spec.kinds.length) {
+      const sep = document.createElement("div");
+      sep.className = "pipeline-legend-section";
+      sep.textContent = "Step kinds";
+      els.roleLegend.appendChild(sep);
+      for (const k of spec.kinds) {
+        const chip = document.createElement("span");
+        chip.className = `pipeline-kind-chip kind-${k}`;
+        chip.textContent = KIND_LABELS[k] || k;
+        els.roleLegend.appendChild(chip);
+      }
+    }
+  }
+
+  function mountReactApp(mod) {
+    const {
+      React,
+      ReactDOMClient,
+      ReactFlow,
+      Background,
+      Controls,
+      MiniMap,
+      Handle,
+      Position,
+      MarkerType,
+      dagre,
+    } = mod;
+    const e = React.createElement;
+    const { useMemo, useCallback } = React;
+
+    const handleStyle = {
+      background: "transparent",
+      border: "none",
+      width: 1,
+      height: 1,
+      pointerEvents: "none",
+    };
+    const Hin = e(Handle, { type: "target", position: Position.Top, isConnectable: false, style: handleStyle });
+    const Hout = e(Handle, { type: "source", position: Position.Bottom, isConnectable: false, style: handleStyle });
+
+    function ioBlock(data) {
+      const row = (which, label, vars) =>
+        e("div", { className: `pipeline-io-row pipeline-io-${which}` },
+          e("span", { className: "pipeline-io-prefix" }, label),
+          e("span", { className: "pipeline-io-vars" },
+            (vars && vars.length)
+              ? vars.map((v, i) =>
+                  e(React.Fragment, { key: v + i },
+                    i > 0 ? e("span", { className: "pipeline-io-sep" }, "·") : null,
+                    e("code", { className: "pipeline-io-var" }, v),
+                  ),
+                )
+              : e("span", { className: "pipeline-io-empty" }, "—"),
+          ),
+        );
+      return e("div", { className: "pipeline-io" },
+        row("in", "in", data.inputs),
+        row("out", "out", data.outputs),
+      );
+    }
+
+    function StepNode({ data, selected }) {
+      const cls = ["pipeline-card", `kind-${data.kind}`,
+                   selected ? "is-selected" : "",
+                   data.optional ? "is-optional" : ""].filter(Boolean).join(" ");
+      return e("div", { className: cls },
+        Hin,
+        e("div", { className: "pipeline-card-row" },
+          e("span", { className: "pipeline-card-label" }, data.label),
+          data.role
+            ? e("span", { className: "pipeline-role-badge", "data-role": data.role }, data.role)
+            : e("span", { className: `pipeline-kind-chip kind-${data.kind}` }, KIND_LABELS[data.kind] || data.kind),
+        ),
+        e("div", { className: "pipeline-card-desc" }, data.description),
+        ioBlock(data),
+        e("div", { className: "pipeline-card-meta" },
+          data.prompt_name
+            ? e("code", { className: "pipeline-card-prompt" }, data.prompt_name)
+            : null,
+          data.per && data.per !== "per_call"
+            ? e("span", { className: "pipeline-card-per" }, PER_LABELS[data.per] || data.per)
+            : null,
+          data.optional ? e("span", { className: "pipeline-card-flag" }, "optional") : null,
+        ),
+        Hout,
+      );
+    }
+
+    function MiniNode({ data, selected }) {
+      const cls = ["pipeline-mini", `kind-${data.kind}`,
+                   selected ? "is-selected" : "",
+                   data.optional ? "is-optional" : ""].filter(Boolean).join(" ");
+      return e("div", { className: cls },
+        Hin,
+        e("div", { className: "pipeline-mini-row" },
+          e("span", { className: `pipeline-kind-chip kind-${data.kind}` }, KIND_LABELS[data.kind] || data.kind),
+          e("span", { className: "pipeline-mini-label" }, data.label),
+          data.optional ? e("span", { className: "pipeline-card-flag" }, "opt") : null,
+        ),
+        e("div", { className: "pipeline-mini-desc" }, data.description),
+        Hout,
+      );
+    }
+
+    function BranchNode({ data, selected }) {
+      const cls = ["pipeline-branch", selected ? "is-selected" : ""].filter(Boolean).join(" ");
+      return e("div", { className: cls },
+        Hin,
+        e("div", { className: "pipeline-branch-head" },
+          e("span", { className: "pipeline-branch-icon", "aria-hidden": "true" }, "◇"),
+          e("span", { className: "pipeline-branch-label" }, data.label),
+        ),
+        data.branch_condition
+          ? e("div", { className: "pipeline-branch-cond" }, data.branch_condition)
+          : null,
+        (data.branch_outcomes && data.branch_outcomes.length)
+          ? e("ul", { className: "pipeline-branch-outcomes" },
+              data.branch_outcomes.map((o, i) =>
+                e("li", { key: i }, o),
+              ),
+            )
+          : null,
+        Hout,
+      );
+    }
+
+    function LoopNode({ data, selected }) {
+      const cls = ["pipeline-loop", selected ? "is-selected" : ""].filter(Boolean).join(" ");
+      return e("div", { className: cls },
+        Hin,
+        e("div", { className: "pipeline-loop-row" },
+          e("span", { className: "pipeline-loop-icon", "aria-hidden": "true" }, "↻"),
+          e("span", { className: "pipeline-loop-label" }, data.label),
+        ),
+        data.loop_scope
+          ? e("div", { className: "pipeline-loop-scope" }, data.loop_scope)
+          : null,
+        Hout,
+      );
+    }
+
+    function StageNode({ data }) {
+      return e("div", { className: "pipeline-stage", "data-phase": data.phase },
+        e("div", { className: "pipeline-stage-row" },
+          e("span", { className: "pipeline-stage-icon", "aria-hidden": "true" }, "⚡"),
+          e("span", { className: "pipeline-stage-label" }, data.label),
+        ),
+        data.trigger
+          ? e("div", { className: "pipeline-stage-when" }, data.trigger)
+          : null,
+        (data.triggered_by && data.triggered_by.length)
+          ? e("div", { className: "pipeline-stage-by" },
+              data.triggered_by.map((t, i) =>
+                e("code", { key: i, className: "pipeline-stage-by-chip" }, t),
+              ),
+            )
+          : null,
+        e(Handle, { type: "source", position: Position.Bottom, isConnectable: false, style: handleStyle }),
+      );
+    }
+
+    const nodeTypes = {
+      llm: StepNode,
+      template_render: StepNode,
+      embed: MiniNode,
+      compute: MiniNode,
+      storage: MiniNode,
+      branch: BranchNode,
+      loop_marker: LoopNode,
+      stage: StageNode,
+    };
+
+    const { nodes, edges } = buildGraph(spec, dagre, MarkerType, visibleKinds);
+
+    function App() {
+      const onNodeClick = useCallback((_, node) => {
+        if (node.data?.step) selectStep(node.data.step);
+      }, []);
+
+      return e(ReactFlow, {
+        nodes,
+        edges,
+        nodeTypes,
+        onNodeClick,
+        nodesDraggable: false,
+        nodesConnectable: false,
+        edgesFocusable: false,
+        elementsSelectable: true,
+        fitView: true,
+        fitViewOptions: { padding: 0.1 },
+        minZoom: 0.15,
+        maxZoom: 1.5,
+        defaultEdgeOptions: { animated: false },
+      },
+        e(Background, { gap: 24, size: 1 }),
+        e(Controls, { showInteractive: false }),
+        e(MiniMap, { pannable: true, zoomable: true, ariaLabel: "Pipeline mini-map" }),
+      );
+    }
+
+    if (reactRoot) reactRoot.unmount();
+    reactRoot = ReactDOMClient.createRoot(els.canvas);
+    reactRoot.render(e(App));
+  }
+
+  function selectStep(step) {
+    els.detail.hidden = false;
+    els.detailTitle.textContent = step.label;
+    const inputs = step.inputs.length
+      ? step.inputs.map((v) => `<code>${escapeHtml(v)}</code>`).join(" ")
+      : `<span class="hint">—</span>`;
+    const outputs = step.outputs.length
+      ? step.outputs.map((v) => `<code>${escapeHtml(v)}</code>`).join(" ")
+      : `<span class="hint">—</span>`;
+
+    let kindLine = "";
+    if (step.kind === "llm" || step.kind === "template_render") {
+      kindLine = `<dt>Prompt</dt><dd>${step.prompt_name ? `<code>${escapeHtml(step.prompt_name)}</code>` : `<span class="hint">— (uses messages from upstream template)</span>`}</dd>`;
+      if (step.role) {
+        kindLine += `<dt>Role</dt><dd><span class="pipeline-role-badge" data-role="${escapeAttr(step.role)}">${escapeHtml(step.role)}</span></dd>`;
+      }
+    }
+    let extra = "";
+    if (step.kind === "branch") {
+      extra = `<div class="pipeline-detail-section"><strong>Condition</strong><div>${escapeHtml(step.branch_condition || step.description)}</div></div>`;
+      if (step.branch_outcomes?.length) {
+        extra += `<div class="pipeline-detail-section"><strong>Outcomes</strong><ul>${step.branch_outcomes.map((o) => `<li>${escapeHtml(o)}</li>`).join("")}</ul></div>`;
+      }
+    }
+    if (step.kind === "loop_marker" && step.loop_scope) {
+      extra = `<div class="pipeline-detail-section"><strong>Loop scope</strong><div>${escapeHtml(step.loop_scope)}</div></div>`;
+    }
+
+    els.detailBody.innerHTML = `
+      <dl class="pipeline-kv">
+        <dt>Step ID</dt><dd><code>${escapeHtml(step.id)}</code></dd>
+        <dt>Kind</dt><dd><span class="pipeline-kind-chip kind-${escapeAttr(step.kind)}">${escapeHtml(KIND_LABELS[step.kind] || step.kind)}</span></dd>
+        ${kindLine}
+        <dt>Phase</dt><dd>${escapeHtml(step.phase)}</dd>
+        <dt>Cadence</dt><dd>${escapeHtml(PER_LABELS[step.per] || step.per)}</dd>
+        <dt>Inputs</dt><dd class="pipeline-kv-row">${inputs}</dd>
+        <dt>Outputs</dt><dd class="pipeline-kv-row">${outputs}</dd>
+        ${step.optional ? `<dt>Status</dt><dd><span class="pipeline-card-flag">optional</span></dd>` : ""}
+      </dl>
+      ${extra}
+      <p class="hint">Prompt and model editing arrive in the next phase of the inspector.</p>
+    `;
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, "&quot;");
+  }
+
+  return {
+    refresh() { void load(); },
+  };
+}
+
+
+function buildGraph(spec, dagre, MarkerType, visibleKinds) {
+  const kinds = visibleKinds || new Set(ALL_KINDS);
+  // Filter + contract: build effective steps + edges from the visible-kinds set.
+  const { steps: effectiveSteps, edges: effectiveEdges } = contractGraph(
+    spec.steps, spec.edges, kinds,
+  );
+  const effectiveCrossPhase = contractGraph(
+    spec.steps, spec.cross_phase_edges || [], kinds,
+  ).edges;
+
+  const nodes = [];
+  const edges = [];
+
+  // Per-phase layout: dagre over only seq+branch+alt edges within the phase.
+  let cursorX = 0;
+  const phaseBounds = {};
+  for (const phase of spec.phases) {
+    const phaseSteps = effectiveSteps.filter((s) => s.phase === phase.id);
+    if (phaseSteps.length === 0) continue;
+    const stepIds = new Set(phaseSteps.map((s) => s.id));
+    const layoutEdges = effectiveEdges.filter(
+      (ed) => stepIds.has(ed.source) && stepIds.has(ed.target) && ed.kind !== "loop_back",
+    );
+
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: "TB", nodesep: 36, ranksep: 56, marginx: 12, marginy: 12 });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    for (const s of phaseSteps) {
+      const dims = NODE_DIMS[s.kind] || NODE_DIMS.compute;
+      g.setNode(s.id, { width: dims[0], height: dims[1] });
+    }
+    for (const ed of layoutEdges) {
+      g.setEdge(ed.source, ed.target);
+    }
+
+    dagre.layout(g);
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const id of g.nodes()) {
+      const n = g.node(id);
+      const x = n.x - n.width / 2;
+      const y = n.y - n.height / 2;
+      if (x < minX) minX = x;
+      if (x + n.width > maxX) maxX = x + n.width;
+      if (y < minY) minY = y;
+      if (y + n.height > maxY) maxY = y + n.height;
+    }
+    if (!isFinite(minX)) { minX = 0; maxX = 0; minY = 0; maxY = 0; }
+
+    const phaseWidth = maxX - minX;
+
+    // Stage trigger node sits above the phase, centered on its width.
+    const stageId = `__stage:${phase.id}`;
+    nodes.push({
+      id: stageId,
+      type: "stage",
+      position: {
+        x: cursorX + Math.max(0, (phaseWidth - 320) / 2),
+        y: -STAGE_OFFSET_Y,
+      },
+      data: {
+        phase: phase.id,
+        label: phase.label,
+        trigger: phase.trigger,
+        triggered_by: phase.triggered_by,
+      },
+      style: { width: 320 },
+      selectable: false,
+    });
+
+    // Step nodes.
+    for (const step of phaseSteps) {
+      const n = g.node(step.id);
+      if (!n) continue;
+      const dims = NODE_DIMS[step.kind] || NODE_DIMS.compute;
+      nodes.push({
+        id: step.id,
+        type: step.kind,
+        position: {
+          x: cursorX + (n.x - n.width / 2 - minX),
+          y: (n.y - n.height / 2 - minY),
+        },
+        data: { ...step, step },
+        style: { width: dims[0] },
+      });
+    }
+
+    // Stage → entry edge: pick the step with no incoming intra-phase seq/branch edge.
+    const incoming = new Set(layoutEdges.map((e) => e.target));
+    const entryStep = phaseSteps.find((s) => !incoming.has(s.id));
+    if (entryStep) {
+      edges.push({
+        id: `${stageId}->${entryStep.id}`,
+        source: stageId,
+        target: entryStep.id,
+        type: "smoothstep",
+        style: { stroke: "var(--accent)", strokeDasharray: "4 4" },
+        markerEnd: { type: MarkerType.ArrowClosed, color: "var(--accent)" },
+      });
+    }
+
+    phaseBounds[phase.id] = {
+      xStart: cursorX,
+      xEnd: cursorX + phaseWidth,
+      width: phaseWidth,
+    };
+    cursorX += phaseWidth + PHASE_GAP;
+  }
+
+  const renderedNodeIds = new Set(nodes.map((n) => n.id));
+
+  // Intra-phase edges (now rendered, including loop_back edges).
+  for (const ed of effectiveEdges) {
+    if (!renderedNodeIds.has(ed.source) || !renderedNodeIds.has(ed.target)) continue;
+    edges.push(makeEdge(ed, MarkerType));
+  }
+
+  // Cross-phase ghost edges (data-flow hints between phases).
+  for (const ed of effectiveCrossPhase) {
+    if (!renderedNodeIds.has(ed.source) || !renderedNodeIds.has(ed.target)) continue;
+    edges.push(makeEdge(ed, MarkerType, { ghost: true }));
+  }
+
+  return { nodes, edges };
+}
+
+
+// Filter steps by visibleKinds and contract edges through hidden steps.
+// Walks each visible step's outgoing edges; whenever the target is hidden,
+// jumps through it and re-attaches to the next visible target. Loop-back
+// edges are preserved only when both endpoints survive filtering — this
+// avoids spurious back-edges when the loop boundary itself is hidden.
+function contractGraph(allSteps, allEdges, visibleKinds) {
+  const stepById = new Map(allSteps.map((s) => [s.id, s]));
+  const isVisible = (id) => {
+    const s = stepById.get(id);
+    return s ? visibleKinds.has(s.kind) : false;
+  };
+  const visibleSteps = allSteps.filter((s) => visibleKinds.has(s.kind));
+
+  // Forward adjacency, excluding loop_back edges from the contraction walk
+  // (those are folded only when both endpoints stay visible).
+  const fwd = new Map();
+  for (const ed of allEdges) {
+    if (ed.kind === "loop_back") continue;
+    if (!fwd.has(ed.source)) fwd.set(ed.source, []);
+    fwd.get(ed.source).push(ed);
+  }
+
+  const out = [];
+  const seen = new Set();
+  const push = (edge) => {
+    const key = `${edge.source}->${edge.target}:${edge.kind}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(edge);
+  };
+
+  for (const src of visibleSteps) {
+    const visited = new Set();
+    const queue = [];
+    for (const ed of fwd.get(src.id) || []) {
+      queue.push({ target: ed.target, kind: ed.kind, label: ed.label });
+    }
+    while (queue.length) {
+      const cur = queue.shift();
+      if (visited.has(cur.target)) continue;
+      visited.add(cur.target);
+      if (isVisible(cur.target)) {
+        push({ source: src.id, target: cur.target, kind: cur.kind, label: cur.label || "" });
+      } else {
+        for (const next of fwd.get(cur.target) || []) {
+          if (visited.has(next.target)) continue;
+          queue.push({
+            target: next.target,
+            kind: cur.kind === "seq" && next.kind !== "seq" ? next.kind : cur.kind,
+            label: cur.label || next.label,
+          });
+        }
+      }
+    }
+  }
+
+  // Preserve loop_back edges only when both endpoints are visible.
+  for (const ed of allEdges) {
+    if (ed.kind !== "loop_back") continue;
+    if (isVisible(ed.source) && isVisible(ed.target)) {
+      push({ source: ed.source, target: ed.target, kind: ed.kind, label: ed.label });
+    }
+  }
+
+  return { steps: visibleSteps, edges: out };
+}
+
+
+function makeEdge(ed, MarkerType, { ghost = false } = {}) {
+  let style = {};
+  let labelStyle = { fontSize: 11, fill: "var(--fg-muted)" };
+  let labelBg = { fill: "var(--bg-elev)", fillOpacity: 0.85 };
+  let stroke = "var(--border-strong)";
+
+  if (ed.kind === "branch") {
+    stroke = "var(--node-procedural)";
+  } else if (ed.kind === "loop_back") {
+    stroke = "var(--warn)";
+    style.strokeDasharray = "5 4";
+  } else if (ed.kind === "alt") {
+    stroke = "var(--fg-faint)";
+    style.strokeDasharray = "3 4";
+  }
+  if (ghost) {
+    style.strokeDasharray = "2 6";
+    style.opacity = 0.5;
+    stroke = "var(--fg-faint)";
+  }
+  style.stroke = stroke;
+
+  return {
+    id: `${ed.source}->${ed.target}:${ed.kind}`,
+    source: ed.source,
+    target: ed.target,
+    type: ed.kind === "loop_back" ? "smoothstep" : "smoothstep",
+    label: ed.label || undefined,
+    style,
+    labelStyle,
+    labelBgStyle: labelBg,
+    labelBgPadding: [3, 4],
+    labelBgBorderRadius: 3,
+    markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+  };
+}

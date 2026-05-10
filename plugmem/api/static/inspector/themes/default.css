@@ -665,3 +665,527 @@ details[open] summary { margin-bottom: var(--space); }
 }
 .toast.error { background: var(--danger); }
 .toast.warn  { background: var(--warn); }
+
+/* ---------- pipeline tab ---------- */
+.pipeline-content {
+  position: relative;
+  display: flex;
+  min-height: 0;
+}
+.pipeline-canvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+.pipeline-empty.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  background: transparent;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* xyflow node container — neutralize defaults so our card styles win */
+.pipeline-canvas .react-flow__node {
+  border: none;
+  background: transparent;
+  padding: 0;
+  width: auto;
+  cursor: default;
+}
+.pipeline-canvas .react-flow__node-step {
+  font-family: var(--font-body);
+  font-size: var(--fs-small);
+  color: var(--fg);
+}
+.pipeline-canvas .react-flow__attribution {
+  background: transparent;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+.pipeline-canvas .react-flow__minimap {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.pipeline-canvas .react-flow__controls {
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.pipeline-canvas .react-flow__controls-button {
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+.pipeline-canvas .react-flow__controls-button:hover {
+  background: var(--bg-hover);
+}
+
+.pipeline-card {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 1.25);
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space) * 0.5);
+  box-shadow: var(--shadow);
+  box-sizing: border-box;
+}
+.pipeline-card:hover {
+  background: var(--bg-hover);
+}
+.react-flow__node.selected .pipeline-card,
+.pipeline-card.is-selected {
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+.pipeline-card.is-optional {
+  border-style: dashed;
+}
+
+.pipeline-io {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+  border-top: 1px dashed var(--border);
+}
+.pipeline-io-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--fs-small);
+  line-height: 1.35;
+}
+.pipeline-io-prefix {
+  flex: 0 0 28px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-faint);
+}
+.pipeline-io-row.pipeline-io-out .pipeline-io-prefix {
+  color: var(--accent);
+}
+.pipeline-io-vars {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+.pipeline-io-var {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0 5px;
+  border-radius: 3px;
+  color: var(--fg);
+}
+.pipeline-io-sep {
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+.pipeline-io-empty {
+  color: var(--fg-faint);
+  font-size: var(--fs-small);
+}
+
+.pipeline-stage {
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 0.875) calc(var(--space) * 1.25);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-body);
+  font-size: var(--fs-small);
+  color: var(--fg);
+  width: 100%;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elev));
+}
+.pipeline-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pipeline-stage-icon {
+  font-size: 14px;
+}
+.pipeline-stage-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-size: 12px;
+  color: var(--accent);
+}
+.pipeline-stage-when {
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pipeline-phase-trigger {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+.pipeline-phase-triggered-by {
+  margin-top: 2px;
+  font-size: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.pipeline-phase-triggered-by code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--fg-muted);
+}
+
+/* ---------- mini node (embed / compute / storage) ---------- */
+.pipeline-mini {
+  width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+  font-size: var(--fs-small);
+  box-sizing: border-box;
+  box-shadow: var(--shadow);
+  transition: border-color .12s ease, background .12s ease;
+}
+.pipeline-mini:hover { background: var(--bg-hover); }
+.react-flow__node.selected .pipeline-mini,
+.pipeline-mini.is-selected {
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+.pipeline-mini.is-optional { border-style: dashed; }
+.pipeline-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pipeline-mini-label {
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+}
+.pipeline-mini-desc {
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.pipeline-mini.kind-embed   { border-left-color: var(--node-tag); }
+.pipeline-mini.kind-compute { border-left-color: var(--fg-faint); }
+.pipeline-mini.kind-storage { border-left-color: var(--node-episodic); }
+
+/* ---------- branch node ---------- */
+.pipeline-branch {
+  width: 100%;
+  background: color-mix(in srgb, var(--node-procedural) 8%, var(--bg-elev));
+  border: 1px solid var(--node-procedural);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  font-size: var(--fs-small);
+  box-sizing: border-box;
+  box-shadow: var(--shadow);
+  transition: background .12s ease, border-color .12s ease;
+}
+.pipeline-branch:hover { background: color-mix(in srgb, var(--node-procedural) 14%, var(--bg-elev)); }
+.react-flow__node.selected .pipeline-branch,
+.pipeline-branch.is-selected {
+  background: color-mix(in srgb, var(--node-procedural) 18%, var(--bg-elev));
+}
+.pipeline-branch-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--node-procedural);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: 11px;
+}
+.pipeline-branch-icon { font-size: 14px; }
+.pipeline-branch-label {
+  font-size: var(--fs-small);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg);
+  font-weight: 600;
+}
+.pipeline-branch-cond {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.35;
+}
+.pipeline-branch-outcomes {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--fg);
+  line-height: 1.4;
+}
+.pipeline-branch-outcomes li { margin: 1px 0; }
+
+/* ---------- loop marker ---------- */
+.pipeline-loop {
+  width: 100%;
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg-elev));
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  font-size: var(--fs-small);
+  box-sizing: border-box;
+}
+.pipeline-loop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.pipeline-loop-icon { font-size: 14px; }
+.pipeline-loop-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+.pipeline-loop-scope {
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* ---------- kind chips (legend + inline tags) ---------- */
+.pipeline-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--bg-elev);
+  background: var(--fg-faint);
+}
+.pipeline-kind-chip.kind-llm             { background: var(--node-procedural); }
+.pipeline-kind-chip.kind-template_render { background: var(--node-subgoal); }
+.pipeline-kind-chip.kind-embed           { background: var(--node-tag); }
+.pipeline-kind-chip.kind-compute         { background: var(--fg-faint); }
+.pipeline-kind-chip.kind-storage         { background: var(--node-episodic); }
+.pipeline-kind-chip.kind-branch          { background: var(--node-procedural); }
+.pipeline-kind-chip.kind-loop_marker     { background: var(--warn); }
+
+.pipeline-legend-section {
+  width: 100%;
+  margin: 6px 0 2px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+/* stage trigger node: bigger triggered_by chips below */
+.pipeline-stage-by {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.pipeline-stage-by-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0 5px;
+  border-radius: 3px;
+  color: var(--fg-muted);
+}
+
+.pipeline-detail-section {
+  margin-top: var(--space);
+}
+.pipeline-detail-section ul { padding-left: 18px; margin: 4px 0; }
+
+.pipeline-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+}
+.pipeline-card-label {
+  font-weight: 600;
+  color: var(--fg);
+}
+.pipeline-card-desc {
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+  line-height: 1.35;
+}
+.pipeline-card-meta {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space) * 0.75);
+  flex-wrap: wrap;
+  font-size: var(--fs-small);
+  color: var(--fg-faint);
+}
+.pipeline-card-prompt {
+  font-family: var(--font-mono);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--fg);
+}
+.pipeline-card-per {
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.pipeline-card-flag {
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.pipeline-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--accent-fg);
+  background: var(--fg-faint);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pipeline-role-badge[data-role="structuring"]   { background: var(--node-procedural); }
+.pipeline-role-badge[data-role="retrieval"]     { background: var(--node-semantic); }
+.pipeline-role-badge[data-role="reasoning"]     { background: var(--node-subgoal); }
+.pipeline-role-badge[data-role="consolidation"] { background: var(--node-tag); }
+.pipeline-role-badge[data-role="default"]       { background: var(--node-episodic); }
+
+.pipeline-phase-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+.pipeline-phase-summary {
+  padding: calc(var(--space) * 0.75);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.pipeline-phase-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+  margin-bottom: 2px;
+}
+.pipeline-phase-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--fg-muted);
+}
+.pipeline-role-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+#pipeline-detail {
+  position: absolute;
+  top: var(--space);
+  right: var(--space);
+  width: min(360px, 40vw);
+  max-height: calc(100% - var(--space) * 2);
+  overflow: auto;
+  z-index: 5;
+}
+.pipeline-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px calc(var(--space) * 1.25);
+  margin: 0 0 var(--space);
+}
+.pipeline-kv dt {
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  align-self: center;
+}
+.pipeline-kv dd {
+  margin: 0;
+  color: var(--fg);
+}
+.pipeline-kv code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.pipeline-kv-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

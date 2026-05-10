@@ -359,6 +359,51 @@ class SessionTimelineResponse(BaseModel):
 
 
 # ------------------------------------------------------------------ #
+# Pipeline (inspector)
+# ------------------------------------------------------------------ #
+
+class PipelinePhase(BaseModel):
+    id: str
+    label: str
+    description: str
+    trigger: str = ""
+    triggered_by: List[str] = Field(default_factory=list)
+
+
+class PipelineStep(BaseModel):
+    id: str
+    label: str
+    description: str
+    kind: str = "llm"
+    phase: str
+    prompt_name: str = ""
+    role: str = ""
+    inputs: List[str] = Field(default_factory=list)
+    outputs: List[str] = Field(default_factory=list)
+    per: str = "per_call"
+    optional: bool = False
+    branch_condition: str = ""
+    branch_outcomes: List[str] = Field(default_factory=list)
+    loop_scope: str = ""
+
+
+class PipelineEdge(BaseModel):
+    source: str
+    target: str
+    kind: str = "seq"
+    label: str = ""
+
+
+class PipelineSpecResponse(BaseModel):
+    phases: List[PipelinePhase]
+    steps: List[PipelineStep]
+    edges: List[PipelineEdge]
+    cross_phase_edges: List[PipelineEdge] = Field(default_factory=list)
+    roles: List[str]
+    kinds: List[str] = Field(default_factory=list)
+
+
+# ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
 

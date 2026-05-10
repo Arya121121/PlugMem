@@ -9,8 +9,9 @@ import { mountBrowse } from "./browse.js";
 import { mountRecall } from "./recall.js";
 import { mountGraph } from "./graph.js";
 import { mountSessions } from "./sessions.js";
+import { mountPipeline } from "./pipeline.js";
 
-const TABS = ["browse", "recall", "graph", "sessions"];
+const TABS = ["browse", "recall", "graph", "sessions", "pipeline"];
 const DEFAULT_TAB = "browse";
 
 const state = {
@@ -32,6 +33,7 @@ const els = {
     recall: document.getElementById("tab-recall"),
     graph: document.getElementById("tab-graph"),
     sessions: document.getElementById("tab-sessions"),
+    pipeline: document.getElementById("tab-pipeline"),
   },
   toast: document.getElementById("toast"),
   apiKeyBtn: document.getElementById("api-key-btn"),
@@ -112,10 +114,17 @@ function selectTab(name) {
       refreshSessions();
     }
   }
+  if (name === "pipeline" && pipelineHandle) {
+    if (!pipelineHasLoaded) {
+      pipelineHasLoaded = true;
+      refreshPipeline();
+    }
+  }
 }
 
 let graphHasLoaded = false;
 let sessionsHasLoaded = false;
+let pipelineHasLoaded = false;
 
 function renderStats(stats) {
   if (!stats) {
@@ -182,6 +191,7 @@ let browseHandle = null;
 let recallHandle = null;
 let graphHandle = null;
 let sessionsHandle = null;
+let pipelineHandle = null;
 function refreshBrowse() {
   if (!browseHandle) return;
   browseHandle.refresh({ graphId: state.graphId });
@@ -197,6 +207,10 @@ function refreshGraph() {
 function refreshSessions() {
   if (!sessionsHandle) return;
   sessionsHandle.refresh({ graphId: state.graphId });
+}
+function refreshPipeline() {
+  if (!pipelineHandle) return;
+  pipelineHandle.refresh({ graphId: state.graphId });
 }
 
 async function onGraphChange(gid) {
@@ -268,6 +282,11 @@ async function boot() {
   });
   sessionsHandle = mountSessions({
     container: els.tabPanels.sessions,
+    getGraphId: () => state.graphId,
+    toast,
+  });
+  pipelineHandle = mountPipeline({
+    container: els.tabPanels.pipeline,
     getGraphId: () => state.graphId,
     toast,
   });
