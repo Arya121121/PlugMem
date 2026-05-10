@@ -65,6 +65,9 @@ export function mountPipeline({ container, getGraphId, toast }) {
   let reactRoot = null;
   let xyflowMod = null;
   let visibleKinds = new Set(ALL_KINDS);
+  let currentGraphId = null;
+  const promptInfoByName = new Map();
+  let activePromptStep = null;
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
@@ -88,6 +91,8 @@ export function mountPipeline({ container, getGraphId, toast }) {
       const [s, mod] = await Promise.all([api.getPipelineSpec(), loadXyflow()]);
       spec = s;
       xyflowMod = mod;
+      currentGraphId = getGraphId();
+      await refreshPromptInfo();
       renderSidebar();
       mountReactApp(mod);
       els.empty.hidden = true;
@@ -96,6 +101,19 @@ export function mountPipeline({ container, getGraphId, toast }) {
       els.empty.hidden = false;
       els.empty.textContent = `Error: ${err.message}`;
       toast(`pipeline: ${err.message}`, "error");
+    }
+  }
+
+  async function refreshPromptInfo() {
+    promptInfoByName.clear();
+    const gid = getGraphId();
+    if (!gid) return;
+    try {
+      const res = await api.listPipelinePrompts(gid);
+      for (const p of res.prompts || []) promptInfoByName.set(p.name, p);
+    } catch (err) {
+      // Fail soft: missing override info just means no badges + no editor.
+      console.warn("listPipelinePrompts failed:", err);
     }
   }
 
@@ -189,7 +207,8 @@ export function mountPipeline({ container, getGraphId, toast }) {
     function StepNode({ data, selected }) {
       const cls = ["pipeline-card", `kind-${data.kind}`,
                    selected ? "is-selected" : "",
-                   data.optional ? "is-optional" : ""].filter(Boolean).join(" ");
+                   data.optional ? "is-optional" : "",
+                   data.has_graph_override ? "is-overridden" : ""].filter(Boolean).join(" ");
       return e("div", { className: cls },
         Hin,
         e("div", { className: "pipeline-card-row" },
@@ -208,6 +227,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
             ? e("span", { className: "pipeline-card-per" }, PER_LABELS[data.per] || data.per)
             : null,
           data.optional ? e("span", { className: "pipeline-card-flag" }, "optional") : null,
+          data.has_graph_override ? e("span", { className: "pipeline-override-flag" }, "overridden") : null,
         ),
         Hout,
       );
@@ -297,7 +317,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       stage: StageNode,
     };
 
-    const { nodes, edges } = buildGraph(spec, dagre, MarkerType, visibleKinds);
+    const { nodes, edges } = buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName);
 
     function App() {
       const onNodeClick = useCallback((_, node) => {
@@ -358,6 +378,15 @@ export function mountPipeline({ container, getGraphId, toast }) {
       extra = `<div class="pipeline-detail-section"><strong>Loop scope</strong><div>${escapeHtml(step.loop_scope)}</div></div>`;
     }
 
+    let editorHtml = "";
+    const isEditable = (step.kind === "llm" || step.kind === "template_render") && !!step.prompt_name;
+    if (isEditable) {
+      editorHtml = renderPromptEditorHtml(step);
+      activePromptStep = step;
+    } else {
+      activePromptStep = null;
+    }
+
     els.detailBody.innerHTML = `
       <dl class="pipeline-kv">
         <dt>Step ID</dt><dd><code>${escapeHtml(step.id)}</code></dd>
@@ -370,8 +399,170 @@ export function mountPipeline({ container, getGraphId, toast }) {
         ${step.optional ? `<dt>Status</dt><dd><span class="pipeline-card-flag">optional</span></dd>` : ""}
       </dl>
       ${extra}
-      <p class="hint">Prompt and model editing arrive in the next phase of the inspector.</p>
+      ${editorHtml}
     `;
+
+    if (isEditable) wirePromptEditor(step);
+  }
+
+  function renderPromptEditorHtml(step) {
+    const info = promptInfoByName.get(step.prompt_name);
+    if (!info) {
+      return `
+        <section class="prompt-editor">
+          <h3 class="prompt-editor-title">Prompt</h3>
+          <p class="hint">Could not load prompt details for <code>${escapeHtml(step.prompt_name)}</code>${getGraphId() ? "" : " — pick a graph first"}.</p>
+        </section>
+      `;
+    }
+    const overridden = info.has_graph_override;
+    const startSystem = (overridden ? info.graph : info.builtin)?.system || "";
+    const startUser = (overridden ? info.graph : info.builtin)?.user || "";
+    return `
+      <section class="prompt-editor" data-prompt="${escapeAttr(step.prompt_name)}">
+        <h3 class="prompt-editor-title">Prompt template</h3>
+        <div class="prompt-editor-status">
+          <span class="prompt-status-badge" data-status="${overridden ? "graph" : "builtin"}">
+            ${overridden ? "graph override" : "builtin"}
+          </span>
+          ${info.service ? `<span class="prompt-status-badge" data-status="service">service default loaded</span>` : ""}
+        </div>
+        <details class="prompt-builtin">
+          <summary>Builtin (read-only)</summary>
+          <div class="prompt-builtin-block">
+            <div class="prompt-block-label">System</div>
+            <pre class="prompt-readonly">${escapeHtml(info.builtin?.system || "")}</pre>
+          </div>
+          <div class="prompt-builtin-block">
+            <div class="prompt-block-label">User</div>
+            <pre class="prompt-readonly">${escapeHtml(info.builtin?.user || "")}</pre>
+          </div>
+        </details>
+        <label class="prompt-field">
+          <span class="prompt-field-label">System template</span>
+          <textarea class="prompt-system" rows="6" spellcheck="false">${escapeHtml(startSystem)}</textarea>
+        </label>
+        <label class="prompt-field">
+          <span class="prompt-field-label">User template</span>
+          <textarea class="prompt-user" rows="12" spellcheck="false">${escapeHtml(startUser)}</textarea>
+        </label>
+        <label class="prompt-field">
+          <span class="prompt-field-label">Preview variables (JSON)</span>
+          <textarea class="prompt-vars" rows="4" spellcheck="false" placeholder='{"goal": "...", "observation": "..."}'></textarea>
+          <div class="hint">Templates use <code>{var}</code> placeholders; provide JSON to substitute on preview. Missing keys raise a 400.</div>
+        </label>
+        <div class="prompt-actions">
+          <button type="button" class="btn btn-primary prompt-save">Save</button>
+          <button type="button" class="btn prompt-reset" ${overridden ? "" : "disabled"}>Reset to builtin</button>
+          <button type="button" class="btn prompt-preview">Preview rendered</button>
+        </div>
+        <div class="prompt-preview-output" hidden>
+          <h4>Rendered messages</h4>
+          <div class="prompt-preview-list"></div>
+        </div>
+        <div class="prompt-error" hidden></div>
+      </section>
+    `;
+  }
+
+  function wirePromptEditor(step) {
+    const root = els.detailBody.querySelector(".prompt-editor");
+    if (!root) return;
+    const sysEl = root.querySelector(".prompt-system");
+    const usrEl = root.querySelector(".prompt-user");
+    const varsEl = root.querySelector(".prompt-vars");
+    const saveBtn = root.querySelector(".prompt-save");
+    const resetBtn = root.querySelector(".prompt-reset");
+    const previewBtn = root.querySelector(".prompt-preview");
+    const previewOut = root.querySelector(".prompt-preview-output");
+    const previewList = root.querySelector(".prompt-preview-list");
+    const errorEl = root.querySelector(".prompt-error");
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.hidden = false;
+    }
+    function clearError() {
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+    }
+
+    saveBtn?.addEventListener("click", async () => {
+      const gid = getGraphId();
+      if (!gid) { showError("Pick a graph first."); return; }
+      clearError();
+      saveBtn.disabled = true;
+      try {
+        await api.updatePipelinePrompt(gid, step.prompt_name, {
+          system: sysEl.value,
+          user: usrEl.value,
+        });
+        toast(`Saved override for ${step.prompt_name}`);
+        await refreshPromptInfo();
+        if (xyflowMod) mountReactApp(xyflowMod);
+        // Re-render the editor so badges + reset-button state refresh.
+        if (activePromptStep && activePromptStep.id === step.id) selectStep(step);
+      } catch (err) {
+        showError(`Save failed: ${err.message}`);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    resetBtn?.addEventListener("click", async () => {
+      const gid = getGraphId();
+      if (!gid) { showError("Pick a graph first."); return; }
+      if (!confirm(`Reset ${step.prompt_name} to the builtin template?`)) return;
+      clearError();
+      resetBtn.disabled = true;
+      try {
+        await api.resetPipelinePrompt(gid, step.prompt_name);
+        toast(`Reset ${step.prompt_name} to builtin`);
+        await refreshPromptInfo();
+        if (xyflowMod) mountReactApp(xyflowMod);
+        if (activePromptStep && activePromptStep.id === step.id) selectStep(step);
+      } catch (err) {
+        showError(`Reset failed: ${err.message}`);
+      } finally {
+        resetBtn.disabled = false;
+      }
+    });
+
+    previewBtn?.addEventListener("click", async () => {
+      const gid = getGraphId();
+      if (!gid) { showError("Pick a graph first."); return; }
+      let variables = {};
+      const raw = varsEl.value.trim();
+      if (raw) {
+        try { variables = JSON.parse(raw); }
+        catch (err) { showError(`Variables must be valid JSON: ${err.message}`); return; }
+      }
+      clearError();
+      previewBtn.disabled = true;
+      previewList.innerHTML = "";
+      previewOut.hidden = true;
+      try {
+        const res = await api.previewPipelinePrompt(gid, step.prompt_name, {
+          system: sysEl.value,
+          user: usrEl.value,
+          variables,
+        });
+        for (const msg of res.messages || []) {
+          const block = document.createElement("div");
+          block.className = "prompt-preview-msg";
+          block.innerHTML = `
+            <div class="prompt-preview-role">${escapeHtml(msg.role)}</div>
+            <pre class="prompt-preview-content">${escapeHtml(msg.content)}</pre>
+          `;
+          previewList.appendChild(block);
+        }
+        previewOut.hidden = false;
+      } catch (err) {
+        showError(`Preview failed: ${err.message}`);
+      } finally {
+        previewBtn.disabled = false;
+      }
+    });
   }
 
   function escapeHtml(s) {
@@ -382,12 +573,25 @@ export function mountPipeline({ container, getGraphId, toast }) {
   }
 
   return {
-    refresh() { void load(); },
+    async refresh({ graphId } = {}) {
+      if (!loaded) {
+        await load();
+        return;
+      }
+      if (graphId !== undefined && graphId !== currentGraphId) {
+        currentGraphId = graphId;
+        // Close any open prompt editor for the previous graph.
+        els.detail.hidden = true;
+        activePromptStep = null;
+        await refreshPromptInfo();
+        if (xyflowMod) mountReactApp(xyflowMod);
+      }
+    },
   };
 }
 
 
-function buildGraph(spec, dagre, MarkerType, visibleKinds) {
+function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName) {
   const kinds = visibleKinds || new Set(ALL_KINDS);
   // Filter + contract: build effective steps + edges from the visible-kinds set.
   const { steps: effectiveSteps, edges: effectiveEdges } = contractGraph(
@@ -463,6 +667,9 @@ function buildGraph(spec, dagre, MarkerType, visibleKinds) {
       const n = g.node(step.id);
       if (!n) continue;
       const dims = NODE_DIMS[step.kind] || NODE_DIMS.compute;
+      const promptInfo = step.prompt_name
+        ? (promptByName?.get(step.prompt_name) || null)
+        : null;
       nodes.push({
         id: step.id,
         type: step.kind,
@@ -470,7 +677,11 @@ function buildGraph(spec, dagre, MarkerType, visibleKinds) {
           x: cursorX + (n.x - n.width / 2 - minX),
           y: (n.y - n.height / 2 - minY),
         },
-        data: { ...step, step },
+        data: {
+          ...step,
+          step,
+          has_graph_override: !!promptInfo?.has_graph_override,
+        },
         style: { width: dims[0] },
       });
     }

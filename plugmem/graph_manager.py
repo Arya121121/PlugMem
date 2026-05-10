@@ -11,6 +11,7 @@ from plugmem.clients.embedding import EmbeddingClient
 from plugmem.clients.llm import LLMClient
 from plugmem.clients.llm_router import LLMRouter
 from plugmem.core.memory_graph import MemoryGraph
+from plugmem.prompts.registry import PromptRegistry
 from plugmem.storage.chroma import ChromaStorage
 
 
@@ -22,11 +23,18 @@ class GraphManager:
         storage: ChromaStorage,
         llm: LLMClient,
         embedder: EmbeddingClient,
+        prompts: Optional[PromptRegistry] = None,
     ):
         self._storage = storage
         self._llm = llm
         self._embedder = embedder
+        self._prompts = prompts
         self._graphs: Dict[str, MemoryGraph] = {}
+
+    @property
+    def prompts(self) -> Optional[PromptRegistry]:
+        """Public accessor for the shared prompt registry."""
+        return self._prompts
 
     @property
     def storage(self) -> ChromaStorage:
@@ -48,11 +56,14 @@ class GraphManager:
             graph_id = uuid.uuid4().hex[:12]
 
         self._storage.create_graph(graph_id)
+        if self._prompts is not None:
+            self._prompts.load_graph(graph_id)
         graph = MemoryGraph(
             graph_id=graph_id,
             storage=self._storage,
             llm=self._llm,
             embedder=self._embedder,
+            prompts=self._prompts,
         )
         self._graphs[graph_id] = graph
         return graph_id
@@ -65,11 +76,14 @@ class GraphManager:
         if not self._storage.graph_exists(graph_id):
             raise KeyError(f"Graph '{graph_id}' does not exist")
 
+        if self._prompts is not None:
+            self._prompts.load_graph(graph_id)
         graph = MemoryGraph(
             graph_id=graph_id,
             storage=self._storage,
             llm=self._llm,
             embedder=self._embedder,
+            prompts=self._prompts,
         )
         graph.load()
         self._graphs[graph_id] = graph

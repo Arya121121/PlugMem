@@ -92,4 +92,12 @@ export const api = {
       `/graphs/${encodeURIComponent(gid)}/sessions/${encodeURIComponent(sessionId)}`,
     ),
   getPipelineSpec: () => request("GET", "/pipeline/spec"),
+  listPipelinePrompts: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts`),
+  updatePipelinePrompt: (gid, name, body) =>
+    request("PUT", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts/${encodeURIComponent(name)}`, { body }),
+  resetPipelinePrompt: (gid, name) =>
+    request("POST", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts/${encodeURIComponent(name)}/reset`),
+  previewPipelinePrompt: (gid, name, body) =>
+    request("POST", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts/${encodeURIComponent(name)}/preview`, { body }),
 };

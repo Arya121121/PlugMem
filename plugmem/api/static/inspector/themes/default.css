@@ -1154,10 +1154,187 @@ details[open] summary { margin-bottom: var(--space); }
   position: absolute;
   top: var(--space);
   right: var(--space);
-  width: min(360px, 40vw);
+  width: min(520px, 50vw);
   max-height: calc(100% - var(--space) * 2);
   overflow: auto;
   z-index: 5;
+}
+
+/* override badge on step cards */
+.pipeline-override-flag {
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.pipeline-card.is-overridden {
+  border-left-color: var(--accent);
+}
+
+/* prompt editor in side panel */
+.prompt-editor {
+  margin-top: var(--space);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+.prompt-editor-title {
+  margin: 0;
+  font-size: var(--fs-h1);
+}
+.prompt-editor-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.prompt-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.prompt-status-badge[data-status="builtin"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.prompt-status-badge[data-status="graph"] {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elev));
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.prompt-status-badge[data-status="service"] {
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  color: var(--fg-muted);
+}
+
+.prompt-builtin {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.prompt-builtin > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+}
+.prompt-builtin-block {
+  padding: 0 10px 8px;
+}
+.prompt-block-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--fg-faint);
+  margin-bottom: 2px;
+}
+.prompt-readonly {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.prompt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prompt-field-label {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--fg);
+}
+.prompt-field textarea {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  background: var(--bg-elev);
+  color: var(--fg);
+  line-height: 1.4;
+}
+.prompt-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.prompt-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.prompt-preview-output {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prompt-preview-output h4 {
+  margin: 0;
+  font-size: var(--fs-small);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--fg-muted);
+}
+.prompt-preview-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.prompt-preview-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--fg-faint);
+  font-weight: 600;
+}
+.prompt-preview-content {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  max-height: 240px;
+  overflow: auto;
+  color: var(--fg);
+}
+
+.prompt-error {
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-elev));
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-small);
 }
 .pipeline-kv {
   display: grid;

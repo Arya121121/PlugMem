@@ -221,9 +221,113 @@ class PromptRegistry:
         else:
             self._service_overrides[name] = prompt
 
+    def clear_graph_override(self, name: str, graph_id: str) -> bool:
+        """Remove a per-graph override for one prompt.
+
+        Returns True if there was an override to clear, False otherwise.
+        Does not touch service-wide or builtin layers (those are read-only).
+        """
+        overrides = self._graph_overrides.get(graph_id)
+        if not overrides or name not in overrides:
+            return False
+        del overrides[name]
+        return True
+
+    def has_graph_override(self, name: str, graph_id: str) -> bool:
+        return name in self._graph_overrides.get(graph_id, {})
+
     def list_prompts(self) -> List[str]:
         """List all known prompt names."""
         return sorted(_BUILTIN_DEFAULTS.keys())
+
+    def inspect(self, name: str, graph_id: Optional[str] = None) -> Dict[str, Any]:
+        """Return per-layer templates + effective for a prompt name.
+
+        Layers:
+            ``builtin``  — always present (extracted from the Python class).
+            ``service``  — present if `_defaults.yaml` overrides the name.
+            ``graph``    — present if `{graph_id}.yaml` overrides the name.
+            ``effective``— whichever layer wins resolution (graph → service →
+                            builtin).
+            ``has_graph_override`` — bool, useful for UI badges.
+
+        Each layer dict, when present, has keys ``system`` and ``user``.
+        """
+        if name not in _BUILTIN_DEFAULTS:
+            raise KeyError(f"Unknown prompt: '{name}'")
+
+        builtin = _extract_templates(self._builtins[name])
+        service = (
+            _extract_templates(self._service_overrides[name])
+            if name in self._service_overrides else None
+        )
+        graph = None
+        if graph_id and graph_id in self._graph_overrides and name in self._graph_overrides[graph_id]:
+            graph = _extract_templates(self._graph_overrides[graph_id][name])
+
+        if graph is not None:
+            effective = graph
+        elif service is not None:
+            effective = service
+        else:
+            effective = builtin
+
+        return {
+            "name": name,
+            "builtin": builtin,
+            "service": service,
+            "graph": graph,
+            "effective": effective,
+            "has_graph_override": graph is not None,
+        }
+
+    def save_graph_yaml(self, graph_id: str, path: Optional[str] = None) -> str:
+        """Persist the in-memory per-graph layer to ``{graph_id}.yaml``.
+
+        Writes only the per-graph layer — builtins and service-wide
+        ``_defaults.yaml`` are never modified.
+        """
+        if path is None:
+            if not self._prompts_dir:
+                raise ValueError("Cannot save graph YAML: prompts_dir not configured.")
+            self._prompts_dir.mkdir(parents=True, exist_ok=True)
+            path = str(self._prompts_dir / f"{graph_id}.yaml")
+
+        overrides = self._graph_overrides.get(graph_id, {})
+        out: Dict[str, Dict[str, str]] = {}
+        for name, prompt in overrides.items():
+            if isinstance(prompt, TemplatePrompt):
+                out[name] = {
+                    "system": prompt._system_template,
+                    "user": prompt._user_template,
+                }
+            else:
+                out[name] = _extract_templates(prompt)
+
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(
+                out, f,
+                default_flow_style=False, allow_unicode=True,
+                sort_keys=False, width=120,
+            )
+        logger.info("Saved %d graph prompt overrides to %s", len(out), path)
+        return path
+
+    def render_messages(
+        self,
+        name: str,
+        variables: Mapping[str, Any],
+        graph_id: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """Resolve + render a prompt to chat messages without an LLM call.
+
+        Useful for UI preview.
+        """
+        prompt = self.get(name, graph_id=graph_id)
+        return [
+            {"role": m.role, "content": m.content}
+            for m in prompt.render(variables)
+        ]
 
     def save_defaults_yaml(self, path: Optional[str] = None) -> str:
         """Export built-in defaults as a YAML reference file.

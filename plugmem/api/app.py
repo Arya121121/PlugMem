@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
     app.include_router(retrieval.router, prefix="/api/v1")
     app.include_router(inspector.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")
+    app.include_router(pipeline.graph_router, prefix="/api/v1")
     app.include_router(demo.router, prefix="/api/v1")
 
     # Memory Inspector — static SPA mounted at /inspector/

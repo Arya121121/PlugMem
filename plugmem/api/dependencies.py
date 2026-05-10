@@ -18,6 +18,7 @@ from plugmem.clients.llm import LLMClient, OpenAICompatibleLLMClient
 from plugmem.clients.llm_router import LLMRouter
 from plugmem.config import PlugMemConfig
 from plugmem.graph_manager import GraphManager
+from plugmem.prompts.registry import PromptRegistry
 from plugmem.storage.chroma import ChromaStorage
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,21 @@ def get_config() -> PlugMemConfig:
 _llm_client: LLMClient | LLMRouter | None = None
 _embedding_client: EmbeddingClient | None = None
 _graph_manager: GraphManager | None = None
+_prompt_registry: PromptRegistry | None = None
+
+
+def get_prompt_registry() -> PromptRegistry:
+    """Process-wide :class:`PromptRegistry`.
+
+    ``PROMPTS_DIR`` (default ``./data/prompts``) is the directory for the
+    optional ``_defaults.yaml`` (service-wide overrides) and the per-graph
+    ``{graph_id}.yaml`` files. Builtins always exist regardless.
+    """
+    global _prompt_registry
+    if _prompt_registry is None:
+        prompts_dir = os.getenv("PROMPTS_DIR", "./data/prompts")
+        _prompt_registry = PromptRegistry(prompts_dir=prompts_dir)
+    return _prompt_registry
 
 
 def get_llm(config: PlugMemConfig | None = None) -> LLMClient | LLMRouter:
@@ -170,14 +186,16 @@ def get_graph_manager(config: PlugMemConfig | None = None) -> GraphManager:
             storage=storage,
             llm=llm,
             embedder=embedder,
+            prompts=get_prompt_registry(),
         )
     return _graph_manager
 
 
 def reset_singletons() -> None:
     """Reset cached singletons — useful for testing."""
-    global _llm_client, _embedding_client, _graph_manager
+    global _llm_client, _embedding_client, _graph_manager, _prompt_registry
     _llm_client = None
     _embedding_client = None
     _graph_manager = None
+    _prompt_registry = None
     get_config.cache_clear()

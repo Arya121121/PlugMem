@@ -403,6 +403,80 @@ class PipelineSpecResponse(BaseModel):
     kinds: List[str] = Field(default_factory=list)
 
 
+class PromptLayer(BaseModel):
+    """system + user template for one resolution layer of a prompt."""
+    system: str
+    user: str
+
+
+class PromptInfo(BaseModel):
+    """Per-layer view of a single prompt + which layer is currently winning."""
+    name: str
+    builtin: PromptLayer
+    service: Optional[PromptLayer] = None
+    graph: Optional[PromptLayer] = None
+    effective: PromptLayer
+    has_graph_override: bool = False
+
+
+class PromptListResponse(BaseModel):
+    graph_id: str
+    prompts: List[PromptInfo]
+
+
+class PromptUpdateRequest(BaseModel):
+    system: str = Field(..., description="System message template (Python {var} placeholders).")
+    user: str = Field(..., description="User message template (Python {var} placeholders).")
+
+
+class PromptUpdateResponse(BaseModel):
+    name: str
+    graph_id: str
+    persisted_to: Optional[str] = Field(
+        None,
+        description="Filesystem path the per-graph YAML was written to.",
+    )
+    info: PromptInfo
+
+
+class PromptResetResponse(BaseModel):
+    name: str
+    graph_id: str
+    cleared: bool
+    persisted_to: Optional[str] = None
+    info: PromptInfo
+
+
+class PromptPreviewRequest(BaseModel):
+    variables: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Substitution variables for the {placeholder} fields.",
+    )
+    system: Optional[str] = Field(
+        None,
+        description=(
+            "Optional unsaved system template. If both system and user are "
+            "provided, preview renders these instead of the registered "
+            "template — useful for previewing in-progress edits."
+        ),
+    )
+    user: Optional[str] = Field(
+        None,
+        description="Optional unsaved user template (paired with system).",
+    )
+
+
+class PromptPreviewMessage(BaseModel):
+    role: str
+    content: str
+
+
+class PromptPreviewResponse(BaseModel):
+    name: str
+    graph_id: str
+    messages: List[PromptPreviewMessage]
+
+
 # ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
