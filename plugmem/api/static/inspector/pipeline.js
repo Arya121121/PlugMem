@@ -616,9 +616,9 @@ export function mountPipeline({ container, getGraphId, toast }) {
         </label>
         <label class="prompt-field">
           <span class="prompt-field-label">API key
-            <span class="hint">(leave empty to keep current)</span>
+            <span class="hint">(leave empty to keep current; <code>\${VAR}</code> reads from server env)</span>
           </span>
-          <input class="model-api-key" type="password" value="" autocomplete="new-password" placeholder="sk-…">
+          <input class="model-api-key" type="text" value="" autocomplete="new-password" placeholder="sk-…  or  \${OPENAI_API_KEY}">
         </label>
         <label class="check">
           <input type="checkbox" class="model-azure" ${binding.is_azure ? "checked" : ""}>

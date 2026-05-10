@@ -53,6 +53,17 @@ def _expand_env(value: str) -> str:
     return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), ""), value)
 
 
+def expand_env_vars(value: str) -> str:
+    """Public wrapper for ``${VAR}`` expansion.
+
+    Used by the inspector's model-swap routes so the user can paste
+    ``${OPENAI_API_KEY}`` into the API key field instead of the raw secret.
+    Missing variables expand to empty strings (same semantics as YAML
+    config loading).
+    """
+    return _expand_env(value)
+
+
 def _expand_dict(d: dict) -> dict:
     return {k: _expand_env(v) if isinstance(v, str) else v for k, v in d.items()}
 
@@ -159,9 +170,14 @@ class LLMRouter:
         if role not in ROLES:
             raise ValueError(f"Unknown role '{role}'. Allowed: {list(ROLES)}")
 
+        # Match YAML loader behavior: ``${VAR}`` references in api_key /
+        # base_url are resolved against the process environment at write time.
         if api_key is None:
             existing = self._clients.get(role) or self._clients["default"]
             api_key = getattr(existing, "api_key", "") or ""
+        else:
+            api_key = _expand_env(api_key)
+        base_url = _expand_env(base_url)
 
         new_client = OpenAICompatibleLLMClient(
             base_url=base_url,

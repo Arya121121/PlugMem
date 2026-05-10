@@ -45,7 +45,7 @@ from plugmem.api.schemas import (
 from openai import AzureOpenAI, OpenAI
 
 from plugmem.clients.llm import OpenAICompatibleLLMClient
-from plugmem.clients.llm_router import ROLES as ROUTER_ROLES, LLMRouter
+from plugmem.clients.llm_router import ROLES as ROUTER_ROLES, LLMRouter, expand_env_vars
 from plugmem.core.pipeline_spec import to_dict as pipeline_spec_dict
 from plugmem.graph_manager import GraphManager
 from plugmem.prompts.registry import PromptRegistry, TemplatePrompt
@@ -244,12 +244,14 @@ def test_model(body: ModelTestRequest) -> ModelTestResponse:
     api_key = body.api_key
     if api_key is None and body.role and body.role in ROUTER_ROLES:
         # Reuse the role's existing key if the caller didn't re-type it.
-        summary = _router().role_summary()[body.role]
-        # role_summary doesn't expose the key; reach into the router directly.
         existing = _router()._clients.get(body.role) or _router()._clients.get("default")
         api_key = getattr(existing, "api_key", "") if existing else ""
+    elif api_key is not None:
+        # ``${VAR}`` references resolve against the server's environment.
+        api_key = expand_env_vars(api_key)
     if api_key is None:
         api_key = ""
+    base_url = expand_env_vars(body.base_url)
 
     started = time.monotonic()
     try:
@@ -258,12 +260,12 @@ def test_model(body: ModelTestRequest) -> ModelTestResponse:
         # errors as "ok with empty response". Call the SDK directly instead.
         if body.is_azure:
             sdk = AzureOpenAI(
-                azure_endpoint=body.base_url,
+                azure_endpoint=base_url,
                 api_key=api_key,
                 api_version=body.azure_api_version,
             )
         else:
-            sdk = OpenAI(base_url=body.base_url, api_key=api_key)
+            sdk = OpenAI(base_url=base_url, api_key=api_key)
         resp = sdk.chat.completions.create(
             model=body.model,
             messages=[{"role": "user", "content": body.prompt}],
