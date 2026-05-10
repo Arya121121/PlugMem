@@ -6,9 +6,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from plugmem.api.auth import require_api_key
-from plugmem.api.dependencies import get_graph_manager
+from plugmem.api.dependencies import get_embedder, get_graph_manager
 from plugmem.api.schemas import (
+    EpisodicUpdateRequest,
     NodeDetailResponse,
+    ProceduralUpdateRequest,
     RecallAuditEntry,
     RecallListResponse,
     RecallTraceRequest,
@@ -17,9 +19,12 @@ from plugmem.api.schemas import (
     SemanticUpdateRequest,
     SessionEvent,
     SessionListResponse,
+    SubgoalUpdateRequest,
+    TagUpdateRequest,
     SessionTimelineResponse,
     TopologyResponse,
 )
+from plugmem.core.graph_node import TagNode
 from plugmem.graph_manager import GraphManager
 
 router = APIRouter(prefix="/graphs", tags=["inspector"], dependencies=[Depends(require_api_key)])
@@ -556,15 +561,54 @@ async def update_semantic(
     if node is None:
         raise HTTPException(status_code=404, detail=f"semantic node {semantic_id} not found")
 
-    updates: Dict[str, Any] = {}
+    metadata_updates: Dict[str, Any] = {}
+    new_text: Optional[str] = None
+    new_embedding = None
+    touched = False
+
     if body.is_active is not None:
         node.is_active = bool(body.is_active)
-        updates["is_active"] = node.is_active
+        metadata_updates["is_active"] = node.is_active
+        touched = True
 
-    if not updates:
+    if body.credibility is not None:
+        node.Credibility = int(body.credibility)
+        metadata_updates["credibility"] = node.Credibility
+        touched = True
+
+    if body.text is not None:
+        new_text = body.text
+        node.semantic_memory_str = new_text
+        try:
+            new_embedding = get_embedder().embed(new_text)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"embedding failed: {exc}") from exc
+        node.embedding = new_embedding
+        touched = True
+
+    if body.tags is not None:
+        _reconcile_semantic_tags(graph, node, body.tags)
+        metadata_updates["tags"] = list(node.tags)
+        metadata_updates["tag_ids"] = [t.tag_id for t in node.tag_nodes]
+        touched = True
+
+    if not touched:
         raise HTTPException(status_code=400, detail="no mutable fields supplied")
 
-    graph.storage.update_semantic(graph_id, semantic_id, metadata_updates=updates)
+    embedding_arg = None
+    if new_embedding is not None:
+        if hasattr(new_embedding, "tolist"):
+            embedding_arg = new_embedding.tolist()
+        else:
+            embedding_arg = list(new_embedding)
+
+    graph.storage.update_semantic(
+        graph_id,
+        semantic_id,
+        text=new_text,
+        embedding=embedding_arg,
+        metadata_updates=metadata_updates or None,
+    )
 
     return NodeDetailResponse(
         graph_id=graph_id,
@@ -572,7 +616,362 @@ async def update_semantic(
         node=_serialize_semantic(node),
         edges={
             "tags": [_serialize_tag(t) for t in node.tag_nodes],
+            "episodics": [_serialize_episodic(e) for e in node.episodic_nodes],
+            "bro_semantics": [_serialize_semantic(s) for s in node.bro_semantic_nodes],
         },
+    )
+
+
+def _reconcile_semantic_tags(graph, sem_node, new_tag_strs: List[str]) -> None:
+    """Diff tag list, attach/detach as needed, persist tag-side changes."""
+    embedder = get_embedder()
+    # Preserve order while deduping and dropping empty strings.
+    seen: set = set()
+    cleaned: List[str] = []
+    for t in new_tag_strs:
+        s = (t or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        cleaned.append(s)
+
+    new_set = set(cleaned)
+    old_set = {t.tag for t in sem_node.tag_nodes}
+
+    # Detach from removed tags
+    for tag_node in list(sem_node.tag_nodes):
+        if tag_node.tag in new_set:
+            continue
+        sem_node.tag_nodes.remove(tag_node)
+        if sem_node in tag_node.semantic_nodes:
+            tag_node.semantic_nodes.remove(sem_node)
+        graph.storage.update_tag(
+            graph.graph_id,
+            tag_node.tag_id,
+            metadata_updates={
+                "semantic_ids": [s.semantic_id for s in tag_node.semantic_nodes],
+            },
+        )
+
+    # Attach to added tags (create new tag nodes if needed)
+    for tag_str in cleaned:
+        if tag_str in old_set:
+            continue
+        tag_node = graph.tag2node.get(tag_str)
+        if tag_node is None:
+            try:
+                emb = embedder.embed(tag_str)
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"tag embedding failed: {exc}") from exc
+            tag_id = len(graph.tag_nodes)
+            tag_node = TagNode(
+                tag=tag_str,
+                tag_id=tag_id,
+                embedding=emb,
+                time=graph.semantic_time,
+            )
+            graph.tag_nodes.append(tag_node)
+            graph.tag2node[tag_str] = tag_node
+            graph.tag_id2node[tag_id] = tag_node
+            emb_list = emb.tolist() if hasattr(emb, "tolist") else list(emb)
+            graph.storage.add_tag(
+                graph.graph_id,
+                tag_id=tag_id,
+                tag=tag_str,
+                embedding=emb_list,
+                semantic_ids=[sem_node.semantic_id],
+                time=graph.semantic_time,
+            )
+        else:
+            if sem_node not in tag_node.semantic_nodes:
+                tag_node.semantic_nodes.append(sem_node)
+            graph.storage.update_tag(
+                graph.graph_id,
+                tag_node.tag_id,
+                metadata_updates={
+                    "semantic_ids": [s.semantic_id for s in tag_node.semantic_nodes],
+                },
+            )
+        sem_node.tag_nodes.append(tag_node)
+
+    # Re-sync the cached string list to match canonical order
+    sem_node.tags = [t.tag for t in sem_node.tag_nodes]
+
+
+@router.patch("/{graph_id}/procedural/{procedural_id}", response_model=NodeDetailResponse)
+async def update_procedural(
+    graph_id: str,
+    procedural_id: int,
+    body: ProceduralUpdateRequest,
+) -> NodeDetailResponse:
+    graph = _get_graph(graph_id)
+    node = graph.procedural_id2node.get(procedural_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"procedural node {procedural_id} not found")
+
+    metadata_updates: Dict[str, Any] = {}
+    new_text: Optional[str] = None
+    new_embedding = None
+    touched = False
+
+    if body.text is not None:
+        new_text = body.text
+        node.procedural_memory_str = new_text
+        try:
+            new_embedding = get_embedder().embed(new_text)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"embedding failed: {exc}") from exc
+        node.embedding = new_embedding
+        touched = True
+
+    if body.return_value is not None:
+        node.Return = float(body.return_value)
+        metadata_updates["return"] = node.Return
+        touched = True
+
+    if not touched:
+        raise HTTPException(status_code=400, detail="no mutable fields supplied")
+
+    embedding_arg = None
+    if new_embedding is not None:
+        embedding_arg = (
+            new_embedding.tolist() if hasattr(new_embedding, "tolist") else list(new_embedding)
+        )
+
+    graph.storage.update_procedural(
+        graph_id,
+        procedural_id,
+        text=new_text,
+        embedding=embedding_arg,
+        metadata_updates=metadata_updates or None,
+    )
+
+    return NodeDetailResponse(
+        graph_id=graph_id,
+        node_type="procedural",
+        node=_serialize_procedural(node),
+        edges={
+            "subgoals": [_serialize_subgoal(s) for s in node.subgoal_nodes],
+            "episodics": [_serialize_episodic(e) for e in node.episodic_nodes],
+        },
+    )
+
+
+@router.patch("/{graph_id}/tag/{tag_id}", response_model=NodeDetailResponse)
+async def update_tag(
+    graph_id: str,
+    tag_id: int,
+    body: TagUpdateRequest,
+) -> NodeDetailResponse:
+    graph = _get_graph(graph_id)
+    node = graph.tag_id2node.get(tag_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"tag node {tag_id} not found")
+
+    metadata_updates: Dict[str, Any] = {}
+    new_text: Optional[str] = None
+    new_embedding = None
+    touched = False
+
+    if body.tag is not None:
+        new_text = body.tag.strip()
+        if not new_text:
+            raise HTTPException(status_code=422, detail="tag string cannot be empty")
+        if new_text != node.tag and new_text in graph.tag2node:
+            raise HTTPException(
+                status_code=409,
+                detail=f"tag '{new_text}' already exists (id={graph.tag2node[new_text].tag_id})",
+            )
+        try:
+            new_embedding = get_embedder().embed(new_text)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"embedding failed: {exc}") from exc
+
+        # Update lookup tables and propagate to semantic nodes that hold the tag string.
+        old_tag = node.tag
+        if old_tag in graph.tag2node and graph.tag2node[old_tag] is node:
+            del graph.tag2node[old_tag]
+        node.tag = new_text
+        node.embedding = new_embedding
+        graph.tag2node[new_text] = node
+        for sem_node in node.semantic_nodes:
+            sem_node.tags = [new_text if t == old_tag else t for t in sem_node.tags]
+            graph.storage.update_semantic(
+                graph_id,
+                sem_node.semantic_id,
+                metadata_updates={"tags": list(sem_node.tags)},
+            )
+        touched = True
+
+    if body.importance is not None:
+        node.importance = int(body.importance)
+        metadata_updates["importance"] = node.importance
+        touched = True
+
+    if not touched:
+        raise HTTPException(status_code=400, detail="no mutable fields supplied")
+
+    embedding_arg = None
+    if new_embedding is not None:
+        embedding_arg = (
+            new_embedding.tolist() if hasattr(new_embedding, "tolist") else list(new_embedding)
+        )
+
+    graph.storage.update_tag(
+        graph_id,
+        tag_id,
+        tag=new_text,
+        embedding=embedding_arg,
+        metadata_updates=metadata_updates or None,
+    )
+
+    return NodeDetailResponse(
+        graph_id=graph_id,
+        node_type="tag",
+        node=_serialize_tag(node),
+        edges={"semantics": [_serialize_semantic(s) for s in node.semantic_nodes]},
+    )
+
+
+@router.patch("/{graph_id}/subgoal/{subgoal_id}", response_model=NodeDetailResponse)
+async def update_subgoal(
+    graph_id: str,
+    subgoal_id: int,
+    body: SubgoalUpdateRequest,
+) -> NodeDetailResponse:
+    graph = _get_graph(graph_id)
+    node = graph.subgoal_id2node.get(subgoal_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"subgoal node {subgoal_id} not found")
+
+    if body.subgoal is None:
+        raise HTTPException(status_code=400, detail="no mutable fields supplied")
+
+    new_text = body.subgoal.strip()
+    if not new_text:
+        raise HTTPException(status_code=422, detail="subgoal string cannot be empty")
+    if new_text != node.subgoal and new_text in graph.subgoal2node:
+        raise HTTPException(
+            status_code=409,
+            detail=f"subgoal '{new_text}' already exists (id={graph.subgoal2node[new_text].subgoal_id})",
+        )
+
+    try:
+        new_embedding = get_embedder().embed(new_text)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"embedding failed: {exc}") from exc
+
+    old_subgoal = node.subgoal
+    if old_subgoal in graph.subgoal2node and graph.subgoal2node[old_subgoal] is node:
+        del graph.subgoal2node[old_subgoal]
+    node.subgoal = new_text
+    node.embedding = new_embedding
+    graph.subgoal2node[new_text] = node
+
+    # Procedurals cache subgoal strings on the node and in storage metadata.
+    # Episodics that fed those procedurals carry the same subgoal string as a
+    # free-form copy — rename them too so the detail panels stay consistent.
+    touched_episodics: set = set()
+    for proc_node in node.procedural_nodes:
+        proc_node.subgoals = [new_text if s == old_subgoal else s for s in proc_node.subgoals]
+        graph.storage.update_procedural(
+            graph_id,
+            proc_node.procedural_id,
+            metadata_updates={"subgoal": new_text},
+        )
+        for epis_node in proc_node.episodic_nodes:
+            if epis_node.episodic_id in touched_episodics:
+                continue
+            if epis_node.subgoal != old_subgoal:
+                continue
+            epis_node.subgoal = new_text
+            graph.storage.update_episodic(
+                graph_id,
+                epis_node.episodic_id,
+                metadata_updates={"subgoal": new_text},
+            )
+            touched_episodics.add(epis_node.episodic_id)
+
+    embedding_arg = (
+        new_embedding.tolist() if hasattr(new_embedding, "tolist") else list(new_embedding)
+    )
+    graph.storage.update_subgoal(
+        graph_id,
+        subgoal_id,
+        subgoal=new_text,
+        embedding=embedding_arg,
+    )
+
+    return NodeDetailResponse(
+        graph_id=graph_id,
+        node_type="subgoal",
+        node=_serialize_subgoal(node),
+        edges={"procedurals": [_serialize_procedural(p) for p in node.procedural_nodes]},
+    )
+
+
+@router.patch("/{graph_id}/episodic/{episodic_id}", response_model=NodeDetailResponse)
+async def update_episodic(
+    graph_id: str,
+    episodic_id: int,
+    body: EpisodicUpdateRequest,
+) -> NodeDetailResponse:
+    graph = _get_graph(graph_id)
+    node = graph.episodic_id2node.get(episodic_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"episodic node {episodic_id} not found")
+
+    metadata_updates: Dict[str, Any] = {}
+    document_changed = False
+    touched = False
+
+    if body.observation is not None:
+        node.observation = body.observation
+        metadata_updates["observation"] = node.observation
+        document_changed = True
+        touched = True
+    if body.action is not None:
+        node.action = body.action
+        metadata_updates["action"] = node.action
+        document_changed = True
+        touched = True
+    if body.subgoal is not None:
+        node.subgoal = body.subgoal
+        metadata_updates["subgoal"] = node.subgoal
+        touched = True
+    if body.state is not None:
+        node.state = body.state
+        metadata_updates["state"] = node.state
+        touched = True
+    if body.reward is not None:
+        node.reward = body.reward
+        metadata_updates["reward"] = node.reward
+        touched = True
+
+    if not touched:
+        raise HTTPException(status_code=400, detail="no mutable fields supplied")
+
+    document = None
+    if document_changed:
+        document = (
+            f"{node.observation}\n{node.action}" if (node.observation or node.action) else ""
+        )
+
+    graph.storage.update_episodic(
+        graph_id,
+        episodic_id,
+        document=document,
+        metadata_updates=metadata_updates or None,
+    )
+
+    linked_semantics = [
+        s for s in graph.semantic_nodes if any(e.episodic_id == node.episodic_id for e in s.episodic_nodes)
+    ]
+    return NodeDetailResponse(
+        graph_id=graph_id,
+        node_type="episodic",
+        node=_serialize_episodic(node),
+        edges={"semantics": [_serialize_semantic(s) for s in linked_semantics]},
     )
 
 

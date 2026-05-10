@@ -7,6 +7,7 @@
 //   sparse and pixel-readable.
 
 import { api } from "./api.js";
+import { renderEditor } from "./editor.js";
 
 const NODE_TYPES = ["semantic", "procedural", "tag", "subgoal", "episodic"];
 // SVG connector lines between selected and related desks. Disabled
@@ -610,6 +611,34 @@ export function mountGraph({ container, getGraphId, toast, onTheme }) {
       if (!Array.isArray(list) || list.length === 0) continue;
       body.appendChild(detailSection(`${name} (${list.length})`, edgeList(name, list)));
     }
+
+    const actions = document.createElement("div");
+    actions.className = "detail-actions";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => showEditor(node_type, node));
+    actions.appendChild(editBtn);
+    body.appendChild(actions);
+  }
+
+  function showEditor(node_type, node) {
+    const body = els.detailBody;
+    body.innerHTML = "";
+    const editor = renderEditor({
+      type: node_type,
+      node,
+      getGraphId,
+      toast,
+      onSaved: (res) => {
+        renderDetail(res);
+        // Reflect text/state changes by refetching the topology.
+        void load();
+      },
+      onCancel: () => showDetailFor(node_type, node.id),
+    });
+    body.appendChild(editor);
   }
 
   function closeDetail() {

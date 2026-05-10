@@ -68,6 +68,14 @@ export const api = {
     request("GET", `/graphs/${encodeURIComponent(gid)}/node/${type}/${id}`),
   patchSemantic: (gid, sid, body) =>
     request("PATCH", `/graphs/${encodeURIComponent(gid)}/semantic/${sid}`, { body }),
+  patchProcedural: (gid, pid, body) =>
+    request("PATCH", `/graphs/${encodeURIComponent(gid)}/procedural/${pid}`, { body }),
+  patchTag: (gid, tid, body) =>
+    request("PATCH", `/graphs/${encodeURIComponent(gid)}/tag/${tid}`, { body }),
+  patchSubgoal: (gid, sgid, body) =>
+    request("PATCH", `/graphs/${encodeURIComponent(gid)}/subgoal/${sgid}`, { body }),
+  patchEpisodic: (gid, eid, body) =>
+    request("PATCH", `/graphs/${encodeURIComponent(gid)}/episodic/${eid}`, { body }),
   seedDemo: ({ graph_id, reset } = {}) =>
     request("POST", "/demo/seed", { query: { graph_id, reset } }),
   recallTrace: (gid, body) =>

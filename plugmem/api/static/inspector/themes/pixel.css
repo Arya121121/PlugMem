@@ -392,7 +392,9 @@ textarea {
   font-size: var(--fs-small);
 }
 .detail-edge:hover { background: var(--bg-hover); }
-.detail-actions { display: flex; gap: var(--space); border-top: 3px solid var(--border-strong); padding-top: var(--space); }
+.detail-actions { display: flex; gap: var(--space); border-top: 3px solid var(--border-strong); padding-top: var(--space); margin-top: var(--space); }
+.detail-editor { display: flex; flex-direction: column; gap: var(--space); }
+.detail-editor .form-row { margin-bottom: 0; }
 
 /* ---------- recall trace ---------- */
 .recall-form { width: 320px; }

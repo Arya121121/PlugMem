@@ -1,6 +1,7 @@
 // Browse tab: type chips, search, table, side panel, deactivation.
 
 import { api } from "./api.js";
+import { renderEditor } from "./editor.js";
 
 const NODE_TYPES = ["semantic", "procedural", "tag", "subgoal", "episodic"];
 
@@ -253,34 +254,59 @@ export function mountBrowse({ container, getGraphId, toast }) {
       body.appendChild(detailSection(`${name} (${list.length})`, edgeList(name, list)));
     }
 
-    if (node_type === "semantic") {
-      body.appendChild(actionsRow(node));
-    }
+    body.appendChild(actionsRow(node_type, node));
   }
 
-  function actionsRow(node) {
+  function showEditor(node_type, node) {
+    const body = els.detailBody;
+    body.innerHTML = "";
+    const editor = renderEditor({
+      type: node_type,
+      node,
+      getGraphId,
+      toast,
+      onSaved: async (res) => {
+        renderDetail(res);
+        await load();
+      },
+      onCancel: () => openDetail(node.id),
+    });
+    body.appendChild(editor);
+  }
+
+  function actionsRow(node_type, node) {
     const wrap = document.createElement("div");
     wrap.className = "detail-actions";
-    const btn = document.createElement("button");
-    btn.className = node.is_active ? "btn btn-danger" : "btn btn-primary";
-    btn.textContent = node.is_active ? "Deactivate" : "Reactivate";
-    btn.addEventListener("click", async () => {
-      const gid = getGraphId();
-      if (!gid) return;
-      btn.disabled = true;
-      try {
-        await api.patchSemantic(gid, node.id, { is_active: !node.is_active });
-        toast(`semantic ${node.id} ${node.is_active ? "deactivated" : "reactivated"}`);
-        // refresh row + detail
-        await load();
-        await openDetail(node.id);
-      } catch (err) {
-        toast(`update: ${err.message}`, "error");
-      } finally {
-        btn.disabled = false;
-      }
-    });
-    wrap.appendChild(btn);
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => showEditor(node_type, node));
+    wrap.appendChild(editBtn);
+
+    if (node_type === "semantic") {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = node.is_active ? "btn btn-danger" : "btn btn-primary";
+      toggle.textContent = node.is_active ? "Deactivate" : "Reactivate";
+      toggle.addEventListener("click", async () => {
+        const gid = getGraphId();
+        if (!gid) return;
+        toggle.disabled = true;
+        try {
+          await api.patchSemantic(gid, node.id, { is_active: !node.is_active });
+          toast(`semantic ${node.id} ${node.is_active ? "deactivated" : "reactivated"}`);
+          await load();
+          await openDetail(node.id);
+        } catch (err) {
+          toast(`update: ${err.message}`, "error");
+        } finally {
+          toggle.disabled = false;
+        }
+      });
+      wrap.appendChild(toggle);
+    }
     return wrap;
   }
 

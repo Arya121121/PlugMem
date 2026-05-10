@@ -193,6 +193,52 @@ class NodeDetailResponse(BaseModel):
 
 class SemanticUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
+    text: Optional[str] = Field(
+        None,
+        description="New semantic text. If supplied, the embedding is recomputed.",
+    )
+    tags: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Replacement tag list. Tags are reconciled — existing tag nodes "
+            "are reused by exact-match string, new tags are created and "
+            "embedded, removed tags are detached (the tag node is kept)."
+        ),
+    )
+    credibility: Optional[int] = None
+
+
+class ProceduralUpdateRequest(BaseModel):
+    text: Optional[str] = Field(
+        None,
+        description="New procedural text. If supplied, the embedding is recomputed.",
+    )
+    return_value: Optional[float] = Field(None, alias="return")
+
+    model_config = {"populate_by_name": True}
+
+
+class TagUpdateRequest(BaseModel):
+    tag: Optional[str] = Field(
+        None,
+        description="New tag string. If supplied, the embedding is recomputed.",
+    )
+    importance: Optional[int] = None
+
+
+class SubgoalUpdateRequest(BaseModel):
+    subgoal: Optional[str] = Field(
+        None,
+        description="New subgoal string. If supplied, the embedding is recomputed.",
+    )
+
+
+class EpisodicUpdateRequest(BaseModel):
+    observation: Optional[str] = None
+    action: Optional[str] = None
+    subgoal: Optional[str] = None
+    state: Optional[str] = None
+    reward: Optional[str] = None
 
 
 class RecallTraceRequest(BaseModel):

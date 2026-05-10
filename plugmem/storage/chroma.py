@@ -182,6 +182,29 @@ class ChromaStorage:
             kwargs["embeddings"] = [_to_list(embedding)]
         col.add(**kwargs)
 
+    def update_episodic(
+        self,
+        graph_id: str,
+        episodic_id: int,
+        document: Optional[str] = None,
+        metadata_updates: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        col = self._col(graph_id, "episodic")
+        kwargs: Dict[str, Any] = {"ids": [str(episodic_id)]}
+        if document is not None:
+            kwargs["documents"] = [document]
+        if metadata_updates:
+            processed: Dict[str, Any] = {}
+            for k, v in metadata_updates.items():
+                if isinstance(v, list):
+                    processed[k] = _serialize_list(v)
+                elif k == "time":
+                    processed[k] = str(v)
+                else:
+                    processed[k] = v
+            kwargs["metadatas"] = [processed]
+        col.update(**kwargs)
+
     def get_episodic(self, graph_id: str, episodic_id: int) -> Optional[Dict]:
         col = self._col(graph_id, "episodic")
         result = col.get(ids=[str(episodic_id)], include=["documents", "metadatas"])
