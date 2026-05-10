@@ -209,15 +209,17 @@ def _loop(id, label, *, phase, scope):
 STEPS: List[PipelineStep] = [
     # ============ Append (Memory.append, core/memory.py:59) ============
     _llm("get_subgoal", "Subgoal",
-         "Infer the immediate intent behind the action.",
+         "Infer the immediate intent behind the action. Template variables "
+         "are sourced from (goal, state_t0, observation_t0, action_t0).",
          prompt="get_subgoal", role="structuring", phase="append",
-         inputs=["goal", "state_t0", "observation_t0", "action_t0"],
+         inputs=["goal", "state", "observation", "action"],
          outputs=["subgoal"], per="per_step"),
     _llm("get_reward", "Reward",
-         "Evaluate how well the action moved toward the (sub)goal. "
-         "Note: called with goal=subgoal (not the original goal).",
+         "Evaluate how well the action moved toward the (sub)goal. The "
+         "template's {goal} receives the just-inferred subgoal (not the "
+         "original goal); {observation} receives observation_t1.",
          prompt="get_reward", role="structuring", phase="append",
-         inputs=["subgoal", "state_t0", "action_t0", "observation_t1"],
+         inputs=["goal", "state", "action", "observation"],
          outputs=["reward"], per="per_step"),
     _branch("br_traj_empty", "Trajectory empty?", phase="append",
             condition="Is self.trajectory empty (first step in a new segment)?",
@@ -254,10 +256,11 @@ STEPS: List[PipelineStep] = [
           inputs=["subgoal", "state_t0", "observation_t0", "action_t0", "reward"],
           outputs=["trajectory[+]"]),
     _llm("get_state", "State (next)",
-         "Update the running state summary after observation_t1.",
+         "Update the running state summary after observation_t1. The "
+         "output ``state`` becomes state_t0 in the next iteration.",
          prompt="get_state", role="structuring", phase="append",
-         inputs=["goal", "state_t0", "action_t0", "observation_t1"],
-         outputs=["state_t1"], per="per_step"),
+         inputs=["goal", "state", "action", "observation"],
+         outputs=["state"], per="per_step"),
 
     # ============ Close (Memory.close, core/memory.py:104) ============
     _comp("finalize_traj", "Finalize trajectories",
@@ -273,10 +276,12 @@ STEPS: List[PipelineStep] = [
           phase="close", inputs=["step.state", "step.action", "step.reward"],
           outputs=["trajectory_str"]),
     _llm("get_semantic", "Semantic facts",
-         "Extract durable facts (with tags) from one observation.",
+         "Extract durable facts (with tags) from one observation. "
+         "Each parsed fact has {statement, tags}; the list lives under "
+         "``facts``.",
          prompt="get_semantic", role="structuring", phase="close",
-         inputs=["step.observation"],
-         outputs=["facts[].semantic_memory", "facts[].tags"],
+         inputs=["observation"],
+         outputs=["facts"],
          per="per_step"),
     _emb("embed_facts_and_tags", "Embed facts + tags",
          "For each fact: embed semantic_memory and embed every tag.",
@@ -284,10 +289,12 @@ STEPS: List[PipelineStep] = [
          inputs=["facts[].semantic_memory", "facts[].tags"],
          outputs=["semantic_emb[]"]),
     _llm("get_procedural", "Procedural memory",
-         "Distill an experiential insight + goal from the trajectory.",
+         "Distill an experiential insight + goal from the trajectory. The "
+         "template's {trajectory} variable is the concatenated trajectory_str "
+         "built in Memory.close().",
          prompt="get_procedural", role="structuring", phase="close",
-         inputs=["trajectory_str"],
-         outputs=["experience", "goal", "_return"],
+         inputs=["trajectory"],
+         outputs=["goal", "experience", "return"],
          per="per_trajectory"),
     _emb("embed_proc_subgoal", "Embed subgoal",
          "Embed the goal returned by get_procedural for procedural lookup.",
@@ -320,10 +327,11 @@ STEPS: List[PipelineStep] = [
                 "no  → create a fresh SubgoalNode",
             ]),
     _llm("get_new_subgoal", "Merge subgoals",
-         "Combine an existing subgoal with the incoming one.",
+         "Combine an existing subgoal with the incoming one. The template "
+         "uses {goal_1}/{goal_2} (existing / new respectively).",
          prompt="get_new_subgoal", role="consolidation", phase="insert",
-         inputs=["subgoal_node.subgoal", "proc_item.subgoal"],
-         outputs=["merged_subgoal"], optional=True),
+         inputs=["goal_1", "goal_2"],
+         outputs=["merged"], optional=True),
     _emb("embed_merged_subgoal", "Embed merged subgoal",
          "Re-embed the merged subgoal text.",
          phase="insert", inputs=["merged_subgoal"],
