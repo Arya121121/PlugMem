@@ -9,6 +9,7 @@ from plugmem.api.auth import require_api_key
 from plugmem.api.dependencies import get_embedder, get_graph_manager, get_llm
 from plugmem.api.schemas import MemoryInsertRequest, MemoryInsertResponse
 from plugmem.core.memory import Memory
+from plugmem.core.pipeline_trace import trace_run
 from plugmem.graph_manager import GraphManager
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,17 @@ async def insert_memories(graph_id: str, body: MemoryInsertRequest) -> MemoryIns
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
 
-    if body.mode == "trajectory":
-        return _insert_trajectory(graph, body)
-    else:
-        return _insert_structured(graph, body)
+    endpoint = f"POST /memories (mode={body.mode})"
+    with trace_run(
+        graph_id, endpoint,
+        storage=graph.storage,
+        session_id=body.session_id,
+        meta={"mode": body.mode},
+    ):
+        if body.mode == "trajectory":
+            return _insert_trajectory(graph, body)
+        else:
+            return _insert_structured(graph, body)
 
 
 def _insert_trajectory(graph, body: MemoryInsertRequest) -> MemoryInsertResponse:

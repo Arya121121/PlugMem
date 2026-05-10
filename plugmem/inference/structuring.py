@@ -1,10 +1,18 @@
-"""Structuring inference — accepts injected LLMClient and optional PromptRegistry."""
+"""Structuring inference — accepts injected LLMClient and optional PromptRegistry.
+
+Every LLM call here is recorded into the active PipelineTraceRecorder (if
+one is set on the current context). The recording is best-effort and
+no-op when no recorder is active, so the inference layer stays usable
+outside the API path.
+"""
 from __future__ import annotations
 
 import re
+import time
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from plugmem.clients.llm import LLMClient
+from plugmem.core.pipeline_trace import record_llm_step
 from plugmem.prompts.structuring import (
     GetProceduralPrompt,
     GetReturnPrompt,
@@ -29,16 +37,25 @@ def _resolve(name: str, fallback_cls: type, prompts: Optional[PromptRegistry], g
     return fallback_cls()
 
 
+def _timed_complete(llm: LLMClient, messages: List[Dict[str, str]]) -> tuple[str, int]:
+    started = time.monotonic()
+    response = llm.complete(messages=messages)
+    return response, int((time.monotonic() - started) * 1000)
+
+
 def get_subgoal(
     llm: LLMClient, goal: str, state_t0: str, observation_t0: str, action_t0: str,
     *, prompts: Optional[PromptRegistry] = None, graph_id: Optional[str] = None,
 ) -> str:
     prompt_obj = _resolve("get_subgoal", GetSubgoalPrompt, prompts, graph_id)
     variables = {"goal": goal, "state": state_t0, "observation": observation_t0, "action": action_t0}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### Subgoal\n(.*)"
     match = re.search(pattern, response, re.S)
-    return match.group(1).strip() if match else "<a subgoal>"
+    result = match.group(1).strip() if match else "<a subgoal>"
+    record_llm_step(name="get_subgoal", llm=llm, variables=variables,
+                    response=response, parsed={"subgoal": result}, latency_ms=latency_ms)
+    return result
 
 
 def get_reward(
@@ -47,10 +64,13 @@ def get_reward(
 ) -> str:
     prompt_obj = _resolve("get_reward", GetRewardPrompt, prompts, graph_id)
     variables = {"goal": goal, "state": state_t0, "action": action_t0, "observation": observation_t1}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### Reward\n(.*)"
     match = re.search(pattern, response, re.S)
-    return match.group(1).strip() if match else "<a reward>"
+    result = match.group(1).strip() if match else "<a reward>"
+    record_llm_step(name="get_reward", llm=llm, variables=variables,
+                    response=response, parsed={"reward": result}, latency_ms=latency_ms)
+    return result
 
 
 def get_state(
@@ -59,19 +79,22 @@ def get_state(
 ) -> str:
     prompt_obj = _resolve("get_state", GetStatePrompt, prompts, graph_id)
     variables = {"goal": goal, "state": state_t0, "action": action_t0, "observation": observation_t1}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### State\n(.*)"
     match = re.search(pattern, response, re.S)
-    return match.group(1).strip() if match else "<a state>"
+    result = match.group(1).strip() if match else "<a state>"
+    record_llm_step(name="get_state", llm=llm, variables=variables,
+                    response=response, parsed={"state": result}, latency_ms=latency_ms)
+    return result
 
 
 def get_semantic(
-    llm: LLMClient, step: dict, trajectory_num: int = 0, turn_num: int = 0, time: int = 0,
+    llm: LLMClient, step: dict, trajectory_num: int = 0, turn_num: int = 0, time_idx: int = 0,
     *, prompts: Optional[PromptRegistry] = None, graph_id: Optional[str] = None,
 ) -> List[dict]:
     prompt_obj = _resolve("get_semantic", GetSemanticPrompt, prompts, graph_id)
     variables = {"observation": step["observation"]}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### Facts\n(.*)"
     match = re.search(pattern, response, re.S)
     facts = match.group(1).strip() if match else None
@@ -87,9 +110,13 @@ def get_semantic(
                 "tags": tags,
                 "trajectory_num": trajectory_num,
                 "turn_num": turn_num,
-                "time": time,
+                "time": time_idx,
                 "st_ed": "mid",
             })
+    record_llm_step(name="get_semantic", llm=llm, variables=variables,
+                    response=response,
+                    parsed={"facts": [{"statement": s["semantic_memory"], "tags": s["tags"]} for s in semantic_memory]},
+                    latency_ms=latency_ms)
     return semantic_memory
 
 
@@ -99,13 +126,16 @@ def get_return(
 ) -> float:
     prompt_obj = _resolve("get_return", GetReturnPrompt, prompts, graph_id)
     variables = {"subgoal": subgoal, "procedural_memory": procedural_memory}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### Score\n(.*)"
     match = re.search(pattern, response, re.S)
     try:
-        return float(match.group(1).strip()) if match else 0.0
+        result = float(match.group(1).strip()) if match else 0.0
     except (ValueError, TypeError):
-        return 0.0
+        result = 0.0
+    record_llm_step(name="get_return", llm=llm, variables=variables,
+                    response=response, parsed={"score": result}, latency_ms=latency_ms)
+    return result
 
 
 def get_procedural(
@@ -114,7 +144,7 @@ def get_procedural(
 ) -> tuple:
     prompt_obj = _resolve("get_procedural", GetProceduralPrompt, prompts, graph_id)
     variables = {"trajectory": trajectory}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### Goal\n(.*)\n### Experiential Insight"
     goal_match = re.search(pattern, response, re.S)
     goal = goal_match.group(1).strip() if goal_match else "<a goal>"
@@ -122,4 +152,8 @@ def get_procedural(
     experience_match = re.search(pattern, response, re.S)
     experience = experience_match.group(1).strip() if experience_match else None
     _return = 0.0
+    record_llm_step(name="get_procedural", llm=llm, variables=variables,
+                    response=response,
+                    parsed={"goal": goal, "experience": experience, "return": _return},
+                    latency_ms=latency_ms)
     return experience, goal, _return

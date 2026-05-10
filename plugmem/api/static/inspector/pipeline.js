@@ -58,6 +58,10 @@ export function mountPipeline({ container, getGraphId, toast }) {
     detailTitle: container.querySelector("#pipeline-detail-title"),
     detailBody: container.querySelector("#pipeline-detail-body"),
     detailClose: container.querySelector("#pipeline-detail-close"),
+    tracesList: container.querySelector("#pipeline-traces-list"),
+    tracesRefresh: container.querySelector("#pipeline-traces-refresh"),
+    tracesCap: container.querySelector("#pipeline-traces-cap"),
+    tracesCapSave: container.querySelector("#pipeline-traces-cap-save"),
   };
 
   let spec = null;
@@ -72,6 +76,23 @@ export function mountPipeline({ container, getGraphId, toast }) {
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
+  });
+
+  els.tracesRefresh?.addEventListener("click", () => { void refreshTraces(); });
+  els.tracesCapSave?.addEventListener("click", async () => {
+    const gid = getGraphId();
+    if (!gid) return;
+    const cap = parseInt(els.tracesCap.value, 10);
+    if (Number.isNaN(cap) || cap < 0) {
+      toast("Cap must be a non-negative integer.", "warn");
+      return;
+    }
+    try {
+      const r = await api.setTraceCap(gid, cap);
+      toast(`Trace cap → ${r.cap === 0 ? "unlimited" : r.cap}`);
+    } catch (err) {
+      toast(`Save cap: ${err.message}`, "error");
+    }
   });
 
   const foldToggle = container.querySelector("#pipeline-fold-toggle");
@@ -95,6 +116,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       currentGraphId = getGraphId();
       await Promise.all([refreshPromptInfo(), refreshModelInfo()]);
       renderSidebar();
+      void refreshTraces();
       mountReactApp(mod);
       els.empty.hidden = true;
       loaded = true;
@@ -126,6 +148,104 @@ export function mountPipeline({ container, getGraphId, toast }) {
     } catch (err) {
       console.warn("listPipelineModels failed:", err);
     }
+  }
+
+  async function refreshTraces() {
+    if (!els.tracesList) return;
+    const gid = getGraphId();
+    if (!gid) {
+      els.tracesList.innerHTML = `<div class="hint">No graph selected.</div>`;
+      return;
+    }
+    els.tracesList.innerHTML = `<div class="hint">Loading…</div>`;
+    try {
+      const res = await api.listPipelineTraces(gid, { limit: 25 });
+      if (els.tracesCap && typeof res.cap === "number") {
+        els.tracesCap.value = String(res.cap);
+      }
+      if (!res.traces || res.traces.length === 0) {
+        els.tracesList.innerHTML = `<div class="hint">No runs yet — call /memories, /retrieve, /reason, or /consolidate to generate one.</div>`;
+        return;
+      }
+      els.tracesList.innerHTML = "";
+      for (const t of res.traces) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = `pipeline-trace-row ${t.ok ? "ok" : "fail"}`;
+        row.dataset.traceId = t.trace_id;
+        row.innerHTML = `
+          <div class="pipeline-trace-row-head">
+            <span class="pipeline-trace-endpoint">${escapeHtml(t.endpoint)}</span>
+            <span class="hint">${escapeHtml(t.ts || "")}</span>
+          </div>
+          <div class="pipeline-trace-row-meta">
+            <span class="pipeline-trace-steps">${t.num_steps} ${t.num_steps === 1 ? "step" : "steps"}</span>
+            <span class="hint">${t.duration_ms} ms</span>
+            ${t.ok ? "" : `<span class="pipeline-card-flag" title="failed">err</span>`}
+          </div>
+        `;
+        row.addEventListener("click", () => selectTrace(t.trace_id));
+        els.tracesList.appendChild(row);
+      }
+    } catch (err) {
+      els.tracesList.innerHTML = `<div class="hint">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function selectTrace(traceId) {
+    const gid = getGraphId();
+    if (!gid) return;
+    activePromptStep = null;
+    els.detail.hidden = false;
+    els.detailTitle.textContent = "Run trace";
+    els.detailBody.innerHTML = `<div class="hint">Loading trace…</div>`;
+    try {
+      const t = await api.getPipelineTrace(gid, traceId);
+      renderTraceDetail(t);
+    } catch (err) {
+      els.detailBody.innerHTML = `<div class="prompt-error">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderTraceDetail(t) {
+    els.detailTitle.textContent = `Run · ${t.endpoint}`;
+    const totalMs = t.duration_ms || 0;
+    let stepsHtml = "";
+    for (const s of t.steps || []) {
+      const widthPct = totalMs > 0 ? Math.max(2, Math.round((s.latency_ms / totalMs) * 100)) : 0;
+      const offsetPct = totalMs > 0 ? Math.round((s.ts_offset_ms / totalMs) * 100) : 0;
+      const parsedJson = s.parsed != null ? JSON.stringify(s.parsed, null, 2) : null;
+      const varsJson = s.variables ? JSON.stringify(s.variables, null, 2) : "{}";
+      stepsHtml += `
+        <details class="trace-step ${s.error ? "fail" : "ok"}">
+          <summary>
+            <span class="trace-step-name">${escapeHtml(s.name)}</span>
+            <span class="trace-step-bar"><span class="trace-step-bar-fill" style="margin-left:${offsetPct}%; width:${widthPct}%;"></span></span>
+            <span class="hint">${s.latency_ms} ms${s.model ? ` · ${escapeHtml(s.model)}` : ""}</span>
+            ${s.error ? `<span class="pipeline-card-flag">err</span>` : ""}
+          </summary>
+          <div class="trace-step-body">
+            <div class="trace-step-block"><div class="prompt-block-label">Variables</div><pre class="prompt-readonly">${escapeHtml(varsJson)}</pre></div>
+            ${parsedJson != null ? `<div class="trace-step-block"><div class="prompt-block-label">Parsed</div><pre class="prompt-readonly">${escapeHtml(parsedJson)}</pre></div>` : ""}
+            <div class="trace-step-block"><div class="prompt-block-label">Raw response</div><pre class="prompt-readonly">${escapeHtml(s.response || "")}</pre></div>
+            ${s.error ? `<div class="prompt-error">${escapeHtml(s.error)}</div>` : ""}
+          </div>
+        </details>
+      `;
+    }
+    els.detailBody.innerHTML = `
+      <dl class="pipeline-kv">
+        <dt>Trace ID</dt><dd><code>${escapeHtml(t.trace_id)}</code></dd>
+        <dt>Endpoint</dt><dd><code>${escapeHtml(t.endpoint)}</code></dd>
+        <dt>Started</dt><dd>${escapeHtml(t.ts || "")}</dd>
+        <dt>Duration</dt><dd>${t.duration_ms} ms</dd>
+        <dt>LLM steps</dt><dd>${t.num_steps}</dd>
+        <dt>Status</dt><dd>${t.ok ? `<span class="pipeline-trace-ok">ok</span>` : `<span class="pipeline-trace-fail">failed</span>`}</dd>
+        ${t.session_id ? `<dt>Session</dt><dd><code>${escapeHtml(t.session_id)}</code></dd>` : ""}
+        ${t.error ? `<dt>Error</dt><dd class="pipeline-trace-fail">${escapeHtml(t.error)}</dd>` : ""}
+      </dl>
+      <div class="pipeline-detail-section"><strong>Step timeline</strong>${stepsHtml || `<div class="hint">No LLM steps recorded.</div>`}</div>
+    `;
   }
 
   function renderSidebar() {
@@ -737,6 +857,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         els.detail.hidden = true;
         activePromptStep = null;
         await refreshPromptInfo();
+        void refreshTraces();
         if (xyflowMod) mountReactApp(xyflowMod);
       }
     },

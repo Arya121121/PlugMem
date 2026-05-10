@@ -544,6 +544,66 @@ class ModelTestResponse(BaseModel):
 
 
 # ------------------------------------------------------------------ #
+# Pipeline traces (Phase 4)
+# ------------------------------------------------------------------ #
+
+
+class TraceSummary(BaseModel):
+    trace_id: str
+    ts: str
+    endpoint: str
+    duration_ms: int
+    ok: bool
+    num_steps: int
+    session_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TraceListResponse(BaseModel):
+    graph_id: str
+    traces: List[TraceSummary]
+    cap: int = 100
+
+
+class TraceStep(BaseModel):
+    name: str
+    model: str = ""
+    variables: Dict[str, Any] = Field(default_factory=dict)
+    response: str = ""
+    parsed: Optional[Any] = None
+    latency_ms: int = 0
+    ts_offset_ms: int = 0
+    error: Optional[str] = None
+
+
+class TraceDetailResponse(BaseModel):
+    graph_id: str
+    trace_id: str
+    ts: str
+    endpoint: str
+    duration_ms: int
+    ok: bool
+    num_steps: int
+    session_id: Optional[str] = None
+    error: Optional[str] = None
+    meta: Dict[str, Any] = Field(default_factory=dict)
+    steps: List[TraceStep] = Field(default_factory=list)
+
+
+class TraceCapResponse(BaseModel):
+    graph_id: str
+    cap: int
+
+
+class TraceCapRequest(BaseModel):
+    cap: int = Field(
+        ...,
+        ge=0,
+        description="Retention cap. 0 means unlimited.",
+    )
+
+
+# ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
 

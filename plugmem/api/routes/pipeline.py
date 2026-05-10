@@ -33,6 +33,12 @@ from plugmem.api.schemas import (
     PromptResetResponse,
     PromptUpdateRequest,
     PromptUpdateResponse,
+    TraceCapRequest,
+    TraceCapResponse,
+    TraceDetailResponse,
+    TraceListResponse,
+    TraceStep,
+    TraceSummary,
 )
 from openai import AzureOpenAI, OpenAI
 
@@ -272,6 +278,70 @@ def test_model(body: ModelTestRequest) -> ModelTestResponse:
         ok=True,
         latency_ms=elapsed_ms,
         sample=content[:240],
+    )
+
+
+# ------------------------------------------------------------------ #
+# Pipeline traces (Phase 4)
+# ------------------------------------------------------------------ #
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/traces",
+    response_model=TraceListResponse,
+)
+def list_traces(graph_id: str, limit: int = 20) -> TraceListResponse:
+    gm = _check_graph_exists(graph_id)
+    rows = gm.storage.list_pipeline_traces(graph_id, limit=limit)
+    cap = gm.storage.get_pipeline_trace_cap(graph_id)
+    return TraceListResponse(
+        graph_id=graph_id,
+        traces=[TraceSummary(**r) for r in rows],
+        cap=cap,
+    )
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/traces/cap",
+    response_model=TraceCapResponse,
+)
+def get_trace_cap(graph_id: str) -> TraceCapResponse:
+    gm = _check_graph_exists(graph_id)
+    cap = gm.storage.get_pipeline_trace_cap(graph_id)
+    return TraceCapResponse(graph_id=graph_id, cap=cap)
+
+
+@graph_router.put(
+    "/{graph_id}/pipeline/traces/cap",
+    response_model=TraceCapResponse,
+)
+def set_trace_cap(graph_id: str, body: TraceCapRequest) -> TraceCapResponse:
+    gm = _check_graph_exists(graph_id)
+    new_cap = gm.storage.set_pipeline_trace_cap(graph_id, body.cap)
+    return TraceCapResponse(graph_id=graph_id, cap=new_cap)
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/traces/{trace_id}",
+    response_model=TraceDetailResponse,
+)
+def get_trace(graph_id: str, trace_id: str) -> TraceDetailResponse:
+    gm = _check_graph_exists(graph_id)
+    row = gm.storage.get_pipeline_trace(graph_id, trace_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Trace '{trace_id}' not found")
+    return TraceDetailResponse(
+        graph_id=graph_id,
+        trace_id=row["trace_id"],
+        ts=row["ts"],
+        endpoint=row["endpoint"],
+        duration_ms=row["duration_ms"],
+        ok=row["ok"],
+        num_steps=row["num_steps"],
+        session_id=row.get("session_id"),
+        error=row.get("error"),
+        meta=row.get("meta") or {},
+        steps=[TraceStep(**s) for s in (row.get("steps") or [])],
     )
 
 

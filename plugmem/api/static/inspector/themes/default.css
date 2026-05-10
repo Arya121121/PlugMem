@@ -1424,6 +1424,132 @@ details[open] summary { margin-bottom: var(--space); }
   font-size: 12px;
   color: var(--danger);
 }
+
+/* traces strip in pipeline sidebar */
+.pipeline-traces-section .form-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.pipeline-traces-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  background: var(--bg);
+}
+.pipeline-trace-row {
+  appearance: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-small);
+  color: var(--fg);
+}
+.pipeline-trace-row:hover { background: var(--bg-hover); }
+.pipeline-trace-row.fail { border-left-color: var(--danger); }
+.pipeline-trace-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+}
+.pipeline-trace-endpoint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pipeline-trace-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.pipeline-trace-steps {
+  font-weight: 600;
+  color: var(--accent);
+}
+.pipeline-traces-cap-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.pipeline-traces-cap-row input[type="number"] {
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+
+/* trace detail panel */
+.pipeline-trace-ok   { color: var(--ok); font-weight: 600; }
+.pipeline-trace-fail { color: var(--danger); font-weight: 600; }
+
+.trace-step {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  margin-bottom: 6px;
+}
+.trace-step.fail { border-color: var(--danger); }
+.trace-step > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: var(--fs-small);
+}
+.trace-step-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 110px;
+}
+.trace-step-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+.trace-step-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.trace-step.fail .trace-step-bar-fill { background: var(--danger); }
+.trace-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+.trace-step-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .pipeline-kv {
   display: grid;
   grid-template-columns: max-content 1fr;

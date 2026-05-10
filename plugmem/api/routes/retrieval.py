@@ -16,6 +16,7 @@ from plugmem.api.schemas import (
     RetrieveRequest,
     RetrieveResponse,
 )
+from plugmem.core.pipeline_trace import record_llm_step, trace_run
 from plugmem.graph_manager import GraphManager
 
 
@@ -75,18 +76,20 @@ def _get_graph(graph_id: str):
 async def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
     graph = _get_graph(graph_id)
 
-    audit: Dict[str, Any] = {}
-    messages, variables, mode = graph.retrieve_memory(
-        goal=body.goal,
-        subgoal=body.subgoal,
-        state=body.state,
-        observation=body.observation,
-        time=body.time,
-        task_type=body.task_type,
-        mode=body.mode,
-        _audit=audit,
-    )
-    _write_audit(graph, endpoint="retrieve", body=body, audit=audit, mode=mode, n_messages=len(messages))
+    with trace_run(graph_id, "POST /retrieve", storage=graph.storage,
+                   session_id=getattr(body, "session_id", None)):
+        audit: Dict[str, Any] = {}
+        messages, variables, mode = graph.retrieve_memory(
+            goal=body.goal,
+            subgoal=body.subgoal,
+            state=body.state,
+            observation=body.observation,
+            time=body.time,
+            task_type=body.task_type,
+            mode=body.mode,
+            _audit=audit,
+        )
+        _write_audit(graph, endpoint="retrieve", body=body, audit=audit, mode=mode, n_messages=len(messages))
 
     return RetrieveResponse(
         mode=mode,
@@ -97,22 +100,36 @@ async def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
 
 @router.post("/{graph_id}/reason", response_model=ReasonResponse)
 async def reason(graph_id: str, body: ReasonRequest) -> ReasonResponse:
+    import time as _time
     graph = _get_graph(graph_id)
 
-    audit: Dict[str, Any] = {}
-    messages, variables, mode = graph.retrieve_memory(
-        goal=body.goal,
-        subgoal=body.subgoal,
-        state=body.state,
-        observation=body.observation,
-        time=body.time,
-        task_type=body.task_type,
-        mode=body.mode,
-        _audit=audit,
-    )
+    with trace_run(graph_id, "POST /reason", storage=graph.storage,
+                   session_id=getattr(body, "session_id", None)):
+        audit: Dict[str, Any] = {}
+        messages, variables, mode = graph.retrieve_memory(
+            goal=body.goal,
+            subgoal=body.subgoal,
+            state=body.state,
+            observation=body.observation,
+            time=body.time,
+            task_type=body.task_type,
+            mode=body.mode,
+            _audit=audit,
+        )
 
-    reasoning = graph.llm.complete(messages=messages)
-    _write_audit(graph, endpoint="reason", body=body, audit=audit, mode=mode, n_messages=len(messages))
+        reasoning_llm = getattr(graph, "reasoning_llm", graph.llm)
+        started = _time.monotonic()
+        reasoning = reasoning_llm.complete(messages=messages)
+        latency_ms = int((_time.monotonic() - started) * 1000)
+        record_llm_step(
+            name="reason_llm_call",
+            llm=reasoning_llm,
+            variables={"observation": body.observation or "", "mode": mode},
+            response=reasoning,
+            parsed={"reasoning": reasoning},
+            latency_ms=latency_ms,
+        )
+        _write_audit(graph, endpoint="reason", body=body, audit=audit, mode=mode, n_messages=len(messages))
 
     return ReasonResponse(
         mode=mode,
@@ -125,15 +142,16 @@ async def reason(graph_id: str, body: ReasonRequest) -> ReasonResponse:
 async def consolidate(graph_id: str, body: ConsolidateRequest) -> ConsolidateResponse:
     graph = _get_graph(graph_id)
 
-    stats = graph.update_semantic_subgraph(
-        merge_threshold=body.merge_threshold,
-        max_merges_per_node=body.max_merges_per_node,
-        max_candidates_per_tag=body.max_candidates_per_tag,
-        max_total_candidates=body.max_total_candidates,
-        min_credibility_to_keep_active=body.min_credibility_to_keep_active,
-        credibility_decay=body.credibility_decay,
-        only_update_recent_window=body.only_update_recent_window,
-        allow_merge_with_common_episodic_nodes=body.allow_merge_with_common_episodic_nodes,
-    )
+    with trace_run(graph_id, "POST /consolidate", storage=graph.storage):
+        stats = graph.update_semantic_subgraph(
+            merge_threshold=body.merge_threshold,
+            max_merges_per_node=body.max_merges_per_node,
+            max_candidates_per_tag=body.max_candidates_per_tag,
+            max_total_candidates=body.max_total_candidates,
+            min_credibility_to_keep_active=body.min_credibility_to_keep_active,
+            credibility_decay=body.credibility_decay,
+            only_update_recent_window=body.only_update_recent_window,
+            allow_merge_with_common_episodic_nodes=body.allow_merge_with_common_episodic_nodes,
+        )
 
     return ConsolidateResponse(status="ok", stats=stats)

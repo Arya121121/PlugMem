@@ -210,7 +210,19 @@
           <span class="form-label">Roles</span>
           <div id="pipeline-role-legend" class="pipeline-role-legend"></div>
         </div>
-        <div class="hint">Click any step card to inspect its prompt and bound role. Editing arrives in the next phase.</div>
+        <div class="form-row pipeline-traces-section">
+          <span class="form-label">Recent runs
+            <button type="button" id="pipeline-traces-refresh" class="btn btn-ghost" title="Refresh">↻</button>
+          </span>
+          <div id="pipeline-traces-list" class="pipeline-traces-list"></div>
+          <div class="pipeline-traces-cap-row">
+            <label class="hint">Retention cap (0 = unlimited):
+              <input type="number" id="pipeline-traces-cap" min="0" step="1" style="width: 70px;">
+            </label>
+            <button type="button" id="pipeline-traces-cap-save" class="btn">Save</button>
+          </div>
+        </div>
+        <div class="hint">Click any step card to inspect its prompt and bound role. Click a run to see its full LLM call timeline.</div>
       </aside>
       <section class="content pipeline-content">
         <div id="pipeline-canvas" class="pipeline-canvas"></div>

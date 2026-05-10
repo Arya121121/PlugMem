@@ -105,4 +105,14 @@ export const api = {
     request("PUT", `/pipeline/models/${encodeURIComponent(role)}`, { body }),
   testPipelineModel: (body) =>
     request("POST", "/pipeline/models/test", { body }),
+  listPipelineTraces: (gid, { limit } = {}) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/traces`, {
+      query: { limit },
+    }),
+  getPipelineTrace: (gid, traceId) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/traces/${encodeURIComponent(traceId)}`),
+  getTraceCap: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/traces/cap`),
+  setTraceCap: (gid, cap) =>
+    request("PUT", `/graphs/${encodeURIComponent(gid)}/pipeline/traces/cap`, { body: { cap } }),
 };

@@ -91,6 +91,14 @@ class ChromaStorage:
             self._client.delete_collection(f"{graph_id}_recall_audit")
         except Exception:
             pass
+        try:
+            self._client.delete_collection(f"{graph_id}_pipeline_trace")
+        except Exception:
+            pass
+        try:
+            self._client.delete_collection(f"{graph_id}_pipeline_settings")
+        except Exception:
+            pass
 
     def list_graphs(self) -> List[str]:
         """List all graph IDs by inspecting collection names."""
@@ -615,6 +623,156 @@ class ChromaStorage:
             row["selected_procedural_ids"] = _deserialize_list(row.get("selected_procedural_ids", "[]"))
         rows.sort(key=lambda r: r.get("recall_id", 0), reverse=True)
         return rows[: max(0, limit)]
+
+    # ------------------------------------------------------------------ #
+    # Pipeline trace log (Phase 4)
+    # ------------------------------------------------------------------ #
+    #
+    # Per-graph collection ``{graph_id}_pipeline_trace`` stores one document
+    # per pipeline run; the full step list is JSON-serialized into the
+    # document body. A small sister collection ``{graph_id}_pipeline_settings``
+    # holds the retention cap.
+
+    DEFAULT_TRACE_CAP = 100
+
+    def _trace_col(self, graph_id: str):
+        return self._client.get_or_create_collection(
+            name=f"{graph_id}_pipeline_trace",
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=self._embedding_fn,
+        )
+
+    def _trace_settings_col(self, graph_id: str):
+        return self._client.get_or_create_collection(
+            name=f"{graph_id}_pipeline_settings",
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=self._embedding_fn,
+        )
+
+    def get_pipeline_trace_cap(self, graph_id: str) -> int:
+        col = self._trace_settings_col(graph_id)
+        data = col.get(ids=["trace_cap"], include=["metadatas"])
+        metas = data.get("metadatas") or []
+        if not metas:
+            return self.DEFAULT_TRACE_CAP
+        try:
+            return int(metas[0].get("cap", self.DEFAULT_TRACE_CAP))
+        except (TypeError, ValueError):
+            return self.DEFAULT_TRACE_CAP
+
+    def set_pipeline_trace_cap(self, graph_id: str, cap: int) -> int:
+        col = self._trace_settings_col(graph_id)
+        cap = max(0, int(cap))
+        try:
+            col.delete(ids=["trace_cap"])
+        except Exception:
+            pass
+        col.add(
+            ids=["trace_cap"],
+            documents=["pipeline_trace_cap"],
+            metadatas=[{"cap": cap}],
+        )
+        return cap
+
+    def add_pipeline_trace(self, graph_id: str, record) -> str:
+        """Persist one trace; enforce the retention cap by deleting oldest.
+
+        ``record`` is a :class:`plugmem.core.pipeline_trace.TraceRecord`. The
+        full step list is serialized to JSON into the document body.
+        """
+        from dataclasses import asdict
+        col = self._trace_col(graph_id)
+
+        steps_json = json.dumps([asdict(s) for s in record.steps], default=str)
+        metadata: Dict[str, Any] = {
+            "trace_id": record.trace_id,
+            "ts": record.ts,
+            "endpoint": record.endpoint,
+            "duration_ms": record.duration_ms,
+            "ok": record.ok,
+            "num_steps": record.num_steps,
+            "session_id": record.session_id or "",
+            "error": record.error or "",
+            "meta_json": json.dumps(record.meta or {}, default=str),
+        }
+        col.add(
+            ids=[record.trace_id],
+            documents=[steps_json],
+            metadatas=[metadata],
+        )
+
+        cap = self.get_pipeline_trace_cap(graph_id)
+        if cap > 0:
+            data = col.get(include=["metadatas"])
+            ids = data.get("ids") or []
+            metas = data.get("metadatas") or []
+            if len(ids) > cap:
+                paired = sorted(
+                    zip(ids, metas),
+                    key=lambda p: p[1].get("ts", "") or "",
+                )
+                excess = len(ids) - cap
+                old_ids = [p[0] for p in paired[:excess]]
+                if old_ids:
+                    try:
+                        col.delete(ids=old_ids)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("Trace eviction failed: %s", e)
+        return record.trace_id
+
+    def list_pipeline_traces(
+        self, graph_id: str, limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Return trace summaries (no steps) newest-first."""
+        col = self._trace_col(graph_id)
+        data = col.get(include=["metadatas"])
+        metas = list(data.get("metadatas") or [])
+        rows = []
+        for m in metas:
+            rows.append({
+                "trace_id": m.get("trace_id", ""),
+                "ts": m.get("ts", ""),
+                "endpoint": m.get("endpoint", ""),
+                "duration_ms": int(m.get("duration_ms") or 0),
+                "ok": bool(m.get("ok")),
+                "num_steps": int(m.get("num_steps") or 0),
+                "session_id": m.get("session_id") or None,
+                "error": m.get("error") or None,
+            })
+        rows.sort(key=lambda r: r.get("ts", "") or "", reverse=True)
+        return rows[: max(0, limit)]
+
+    def get_pipeline_trace(
+        self, graph_id: str, trace_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return one full trace (with step list) or None."""
+        col = self._trace_col(graph_id)
+        data = col.get(ids=[trace_id], include=["metadatas", "documents"])
+        ids = data.get("ids") or []
+        if not ids:
+            return None
+        meta = (data.get("metadatas") or [{}])[0]
+        doc = (data.get("documents") or [""])[0]
+        try:
+            steps = json.loads(doc) if doc else []
+        except json.JSONDecodeError:
+            steps = []
+        try:
+            meta_dict = json.loads(meta.get("meta_json", "") or "{}")
+        except json.JSONDecodeError:
+            meta_dict = {}
+        return {
+            "trace_id": meta.get("trace_id", trace_id),
+            "ts": meta.get("ts", ""),
+            "endpoint": meta.get("endpoint", ""),
+            "duration_ms": int(meta.get("duration_ms") or 0),
+            "ok": bool(meta.get("ok")),
+            "num_steps": int(meta.get("num_steps") or 0),
+            "session_id": meta.get("session_id") or None,
+            "error": meta.get("error") or None,
+            "meta": meta_dict,
+            "steps": steps,
+        }
 
     def list_sessions(self, graph_id: str) -> List[str]:
         """Distinct session_ids that appear anywhere in the graph (nodes or recalls)."""

@@ -1,12 +1,18 @@
-"""Retrieval inference — accepts injected LLMClient and optional PromptRegistry."""
+"""Retrieval inference — accepts injected LLMClient and optional PromptRegistry.
+
+LLM calls are recorded via ``record_llm_step`` so the inspector's traces
+view sees retrieve / reason calls alongside ingest calls.
+"""
 from __future__ import annotations
 
 import ast
 import json
 import re
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from plugmem.clients.llm import LLMClient
+from plugmem.core.pipeline_trace import record_llm_step
 from plugmem.prompts.retrieving import (
     GetModePrompt,
     GetNewSemanticPrompt,
@@ -29,13 +35,19 @@ def _resolve(name: str, fallback_cls: type, prompts: Optional[PromptRegistry], g
     return fallback_cls()
 
 
+def _timed_complete(llm: LLMClient, messages: List[Dict[str, str]]) -> Tuple[str, int]:
+    started = time.monotonic()
+    response = llm.complete(messages=messages)
+    return response, int((time.monotonic() - started) * 1000)
+
+
 def get_plan(
     llm: LLMClient, goal: str, subgoal: str, state: str, observation: str,
     *, prompts: Optional[PromptRegistry] = None, graph_id: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
     prompt_obj = _resolve("get_plan", GetPlanPrompt, prompts, graph_id)
     variables = {"goal": goal, "subgoal": subgoal, "state": state, "observation": observation}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
 
     tags_pattern = r"\*\*Tags:\*\*\s*(.*)\n"
     tags_match = re.search(tags_pattern, response)
@@ -53,6 +65,10 @@ def get_plan(
     subgoal_pattern = r"### Next Subgoal\n(.*)"
     subgoal_match = re.search(subgoal_pattern, response, re.S)
     next_subgoal = subgoal_match.group(1).strip() if subgoal_match else "<the next subgoal>"
+    record_llm_step(name="get_plan", llm=llm, variables=variables,
+                    response=response,
+                    parsed={"next_subgoal": next_subgoal, "query_tags": tags},
+                    latency_ms=latency_ms)
     return next_subgoal, tags
 
 
@@ -116,8 +132,19 @@ def get_new_semantic(
 
     prompt_obj = _resolve("get_new_semantic", GetNewSemanticPrompt, prompts, graph_id)
     variables = {"memory_earlier": old_semantic_memory, "memory_later": new_semantic_memory}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
-    return parse_merge_decision(response)
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
+    parsed_err: Optional[str] = None
+    try:
+        decision = parse_merge_decision(response)
+    except Exception as e:
+        parsed_err = str(e)
+        record_llm_step(name="get_new_semantic", llm=llm, variables=variables,
+                        response=response, parsed=None,
+                        latency_ms=latency_ms, error=parsed_err)
+        raise
+    record_llm_step(name="get_new_semantic", llm=llm, variables=variables,
+                    response=response, parsed=decision, latency_ms=latency_ms)
+    return decision
 
 
 def get_new_subgoal(
@@ -126,7 +153,10 @@ def get_new_subgoal(
 ) -> str:
     prompt_obj = _resolve("get_new_subgoal", GetNewSubgoalPrompt, prompts, graph_id)
     variables = {"goal_1": old_subgoal, "goal_2": new_subgoal}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
+    record_llm_step(name="get_new_subgoal", llm=llm, variables=variables,
+                    response=response, parsed={"merged": response},
+                    latency_ms=latency_ms)
     return response
 
 
@@ -136,7 +166,10 @@ def get_mode(
 ) -> str:
     prompt_obj = _resolve("get_mode", GetModePrompt, prompts, graph_id)
     variables = {"observation": observation, "task_type": task_type}
-    response = llm.complete(messages=_render_messages(prompt_obj, variables))
+    response, latency_ms = _timed_complete(llm, _render_messages(prompt_obj, variables))
     pattern = r"### Memory Type\n(.*)"
     match = re.search(pattern, response)
-    return match.group(1).strip() if match else "semantic_memory"
+    result = match.group(1).strip() if match else "semantic_memory"
+    record_llm_step(name="get_mode", llm=llm, variables=variables,
+                    response=response, parsed={"mode": result}, latency_ms=latency_ms)
+    return result

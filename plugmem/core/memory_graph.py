@@ -1145,12 +1145,25 @@ class MemoryGraph:
         task_type: str = "",
         mode: str = None,
     ) -> str:
-        messages, _, _ = self.retrieve_memory(
+        import time as _time
+        from plugmem.core.pipeline_trace import record_llm_step
+        messages, variables, mode_used = self.retrieve_memory(
             goal=goal, subgoal=subgoal, state=state,
             observation=observation, time=time,
             task_type=task_type, mode=mode,
         )
-        return self.reasoning_llm.complete(messages=messages)
+        started = _time.monotonic()
+        response = self.reasoning_llm.complete(messages=messages)
+        latency_ms = int((_time.monotonic() - started) * 1000)
+        record_llm_step(
+            name="reason_llm_call",
+            llm=self.reasoning_llm,
+            variables={"observation": observation or "", "mode": mode_used or ""},
+            response=response,
+            parsed={"reasoning": response},
+            latency_ms=latency_ms,
+        )
+        return response
 
     # ------------------------------------------------------------------ #
     # Semantic merging / consolidation
