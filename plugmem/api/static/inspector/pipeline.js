@@ -67,6 +67,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
   let visibleKinds = new Set(ALL_KINDS);
   let currentGraphId = null;
   const promptInfoByName = new Map();
+  const bindingByRole = new Map();
   let activePromptStep = null;
 
   els.detailClose.addEventListener("click", () => {
@@ -92,7 +93,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       spec = s;
       xyflowMod = mod;
       currentGraphId = getGraphId();
-      await refreshPromptInfo();
+      await Promise.all([refreshPromptInfo(), refreshModelInfo()]);
       renderSidebar();
       mountReactApp(mod);
       els.empty.hidden = true;
@@ -114,6 +115,16 @@ export function mountPipeline({ container, getGraphId, toast }) {
     } catch (err) {
       // Fail soft: missing override info just means no badges + no editor.
       console.warn("listPipelinePrompts failed:", err);
+    }
+  }
+
+  async function refreshModelInfo() {
+    bindingByRole.clear();
+    try {
+      const res = await api.listPipelineModels();
+      for (const b of res.bindings || []) bindingByRole.set(b.role, b);
+    } catch (err) {
+      console.warn("listPipelineModels failed:", err);
     }
   }
 
@@ -387,6 +398,12 @@ export function mountPipeline({ container, getGraphId, toast }) {
       activePromptStep = null;
     }
 
+    let modelHtml = "";
+    const showModelEditor = step.kind === "llm" && !!step.role;
+    if (showModelEditor) {
+      modelHtml = renderModelEditorHtml(step);
+    }
+
     els.detailBody.innerHTML = `
       <dl class="pipeline-kv">
         <dt>Step ID</dt><dd><code>${escapeHtml(step.id)}</code></dd>
@@ -400,9 +417,145 @@ export function mountPipeline({ container, getGraphId, toast }) {
       </dl>
       ${extra}
       ${editorHtml}
+      ${modelHtml}
     `;
 
     if (isEditable) wirePromptEditor(step);
+    if (showModelEditor) wireModelEditor(step);
+  }
+
+  function renderModelEditorHtml(step) {
+    const binding = bindingByRole.get(step.role);
+    if (!binding) {
+      return `
+        <section class="model-editor">
+          <h3 class="model-editor-title">Bound LLM</h3>
+          <p class="hint">Could not load model bindings.</p>
+        </section>
+      `;
+    }
+    const fallbackNote = binding.falls_back_to_default
+      ? `<div class="hint">This role currently falls back to <code>default</code>. Saving creates an explicit binding for <code>${escapeHtml(step.role)}</code>.</div>`
+      : "";
+    return `
+      <section class="model-editor" data-role="${escapeAttr(step.role)}">
+        <h3 class="model-editor-title">Bound LLM
+          <span class="pipeline-role-badge" data-role="${escapeAttr(step.role)}">${escapeHtml(step.role)}</span>
+        </h3>
+        <div class="model-status">
+          <code>${escapeHtml(binding.model || "—")}</code>
+          <span class="hint">@</span>
+          <code>${escapeHtml(binding.base_url || "—")}</code>
+          ${binding.is_azure ? `<span class="pipeline-card-flag">azure</span>` : ""}
+          ${binding.has_api_key ? "" : `<span class="pipeline-card-flag" title="No API key currently set">no key</span>`}
+        </div>
+        ${fallbackNote}
+        <label class="prompt-field">
+          <span class="prompt-field-label">Base URL</span>
+          <input class="model-base-url" type="url" value="${escapeAttr(binding.base_url || "")}" autocomplete="off">
+        </label>
+        <label class="prompt-field">
+          <span class="prompt-field-label">Model</span>
+          <input class="model-name" type="text" value="${escapeAttr(binding.model || "")}" autocomplete="off">
+        </label>
+        <label class="prompt-field">
+          <span class="prompt-field-label">API key
+            <span class="hint">(leave empty to keep current)</span>
+          </span>
+          <input class="model-api-key" type="password" value="" autocomplete="new-password" placeholder="sk-…">
+        </label>
+        <label class="check">
+          <input type="checkbox" class="model-azure" ${binding.is_azure ? "checked" : ""}>
+          <span>Azure OpenAI endpoint</span>
+        </label>
+        <label class="prompt-field">
+          <span class="prompt-field-label">Azure API version</span>
+          <input class="model-azure-version" type="text" value="${escapeAttr(binding.azure_api_version || "2024-05-01-preview")}" autocomplete="off">
+        </label>
+        <div class="prompt-actions">
+          <button type="button" class="btn model-test">Test connection</button>
+          <button type="button" class="btn btn-primary model-apply">Apply</button>
+        </div>
+        <div class="model-test-output" hidden></div>
+        <div class="prompt-error model-error" hidden></div>
+      </section>
+    `;
+  }
+
+  function wireModelEditor(step) {
+    const root = els.detailBody.querySelector(".model-editor");
+    if (!root) return;
+    const baseEl = root.querySelector(".model-base-url");
+    const modelEl = root.querySelector(".model-name");
+    const keyEl = root.querySelector(".model-api-key");
+    const azureEl = root.querySelector(".model-azure");
+    const azVerEl = root.querySelector(".model-azure-version");
+    const testBtn = root.querySelector(".model-test");
+    const applyBtn = root.querySelector(".model-apply");
+    const testOut = root.querySelector(".model-test-output");
+    const errEl = root.querySelector(".model-error");
+
+    function showError(msg) { errEl.textContent = msg; errEl.hidden = false; }
+    function clearError() { errEl.hidden = true; errEl.textContent = ""; }
+
+    testBtn?.addEventListener("click", async () => {
+      clearError();
+      testBtn.disabled = true;
+      testOut.hidden = true;
+      try {
+        const body = {
+          base_url: baseEl.value.trim(),
+          model: modelEl.value.trim(),
+          is_azure: azureEl.checked,
+          azure_api_version: azVerEl.value.trim() || "2024-05-01-preview",
+          role: step.role,
+          prompt: "ping",
+          max_tokens: 16,
+        };
+        const typedKey = keyEl.value;
+        if (typedKey) body.api_key = typedKey;
+        const res = await api.testPipelineModel(body);
+        const cls = res.ok ? "ok" : "error";
+        testOut.className = `model-test-output ${cls}`;
+        testOut.innerHTML = `
+          <div class="model-test-line">
+            <strong>${res.ok ? "OK" : "Failed"}</strong>
+            <span class="hint">${res.latency_ms} ms</span>
+          </div>
+          ${res.sample ? `<pre class="model-test-sample">${escapeHtml(res.sample)}</pre>` : ""}
+          ${res.error ? `<div class="model-test-err">${escapeHtml(res.error)}</div>` : ""}
+        `;
+        testOut.hidden = false;
+      } catch (err) {
+        showError(`Test failed: ${err.message}`);
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+
+    applyBtn?.addEventListener("click", async () => {
+      clearError();
+      applyBtn.disabled = true;
+      try {
+        const body = {
+          base_url: baseEl.value.trim(),
+          model: modelEl.value.trim(),
+          is_azure: azureEl.checked,
+          azure_api_version: azVerEl.value.trim() || "2024-05-01-preview",
+        };
+        const typedKey = keyEl.value;
+        if (typedKey) body.api_key = typedKey;
+        const res = await api.updatePipelineModel(step.role, body);
+        toast(`Bound ${res.role} → ${res.binding.model}`);
+        await refreshModelInfo();
+        // Re-render the editor with the new state.
+        selectStep(step);
+      } catch (err) {
+        showError(`Apply failed: ${err.message}`);
+      } finally {
+        applyBtn.disabled = false;
+      }
+    });
   }
 
   function renderPromptEditorHtml(step) {

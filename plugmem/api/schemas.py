@@ -478,6 +478,72 @@ class PromptPreviewResponse(BaseModel):
 
 
 # ------------------------------------------------------------------ #
+# Model bindings (Phase 3)
+# ------------------------------------------------------------------ #
+
+
+class ModelBinding(BaseModel):
+    role: str
+    base_url: str
+    model: str
+    has_api_key: bool
+    is_azure: bool
+    azure_api_version: str = ""
+    falls_back_to_default: bool = False
+
+
+class ModelListResponse(BaseModel):
+    bindings: List[ModelBinding]
+    roles: List[str]
+
+
+class ModelUpdateRequest(BaseModel):
+    base_url: str
+    model: str
+    api_key: Optional[str] = Field(
+        None,
+        description=(
+            "Set to a non-empty string to update the API key. None or omitted "
+            "keeps the existing key. An empty string clears it."
+        ),
+    )
+    is_azure: bool = False
+    azure_api_version: str = "2024-05-01-preview"
+
+
+class ModelUpdateResponse(BaseModel):
+    role: str
+    binding: ModelBinding
+
+
+class ModelTestRequest(BaseModel):
+    base_url: str
+    model: str
+    api_key: Optional[str] = None
+    is_azure: bool = False
+    azure_api_version: str = "2024-05-01-preview"
+    prompt: str = Field(
+        "ping",
+        description="Probe message — sent as a single user message via complete().",
+    )
+    max_tokens: int = 32
+    role: Optional[str] = Field(
+        None,
+        description=(
+            "If set and api_key is None, the existing api_key for that role "
+            "is used (so the user can test without re-typing the key)."
+        ),
+    )
+
+
+class ModelTestResponse(BaseModel):
+    ok: bool
+    latency_ms: int = 0
+    sample: str = ""
+    error: Optional[str] = None
+
+
+# ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
 

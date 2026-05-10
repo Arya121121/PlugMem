@@ -48,6 +48,12 @@ class OpenAICompatibleLLMClient(LLMClient):
         azure_api_version: str = "2024-05-01-preview",
         token_usage_file: Optional[str] = None,
     ):
+        # Stored for introspection (e.g. LLMRouter.role_summary in the inspector).
+        # Do not log or expose api_key downstream.
+        self.base_url = base_url
+        self.api_key = api_key
+        self.is_azure = is_azure
+        self.azure_api_version = azure_api_version
         self.model = model
         self.max_retries = max_retries
         self.retry_delay = retry_delay

@@ -100,4 +100,9 @@ export const api = {
     request("POST", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts/${encodeURIComponent(name)}/reset`),
   previewPipelinePrompt: (gid, name, body) =>
     request("POST", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts/${encodeURIComponent(name)}/preview`, { body }),
+  listPipelineModels: () => request("GET", "/pipeline/models"),
+  updatePipelineModel: (role, body) =>
+    request("PUT", `/pipeline/models/${encodeURIComponent(role)}`, { body }),
+  testPipelineModel: (body) =>
+    request("POST", "/pipeline/models/test", { body }),
 };

@@ -107,6 +107,74 @@ class LLMRouter:
 
     # -- Factory ---------------------------------------------------------
 
+    # -- Introspection / runtime swap (used by the inspector) -----------
+
+    def has_role(self, role: str) -> bool:
+        """True if *role* has its own client (not falling back to default)."""
+        return role in self._clients
+
+    def role_summary(self) -> Dict[str, Dict[str, object]]:
+        """Snapshot of current per-role bindings for UI display.
+
+        Never includes the api_key (only ``has_api_key``). Roles that fall
+        back to default are reported with ``falls_back_to_default=True`` and
+        the default's settings are echoed so the UI can show the effective
+        binding.
+        """
+        out: Dict[str, Dict[str, object]] = {}
+        default = self._clients["default"]
+        for role in ROLES:
+            client = self._clients.get(role, default)
+            falls_back = role != "default" and role not in self._clients
+            out[role] = {
+                "role": role,
+                "base_url": getattr(client, "base_url", "") or "",
+                "model": getattr(client, "model", "") or "",
+                "has_api_key": bool(getattr(client, "api_key", "")),
+                "is_azure": bool(getattr(client, "is_azure", False)),
+                "azure_api_version": getattr(client, "azure_api_version", ""),
+                "falls_back_to_default": falls_back,
+            }
+        return out
+
+    def set_role(
+        self,
+        role: str,
+        *,
+        base_url: str,
+        model: str,
+        api_key: Optional[str] = None,
+        is_azure: bool = False,
+        azure_api_version: str = "2024-05-01-preview",
+        max_retries: int = 5,
+        retry_delay: float = 5.0,
+    ) -> None:
+        """Atomically swap the client bound to *role*.
+
+        ``api_key=None`` keeps the existing key (or the default's key if the
+        role wasn't explicitly bound). ``api_key=""`` explicitly clears it.
+        Construction is done first; the swap only runs if it succeeds, so a
+        bad config doesn't half-update state.
+        """
+        if role not in ROLES:
+            raise ValueError(f"Unknown role '{role}'. Allowed: {list(ROLES)}")
+
+        if api_key is None:
+            existing = self._clients.get(role) or self._clients["default"]
+            api_key = getattr(existing, "api_key", "") or ""
+
+        new_client = OpenAICompatibleLLMClient(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            is_azure=is_azure,
+            azure_api_version=azure_api_version,
+        )
+        self._clients[role] = new_client
+        logger.info("LLMRouter: role '%s' bound to %s (model=%s)", role, base_url, model)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LLMRouter":
         """Load router from a YAML config file."""

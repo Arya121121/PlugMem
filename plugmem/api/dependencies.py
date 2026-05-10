@@ -67,12 +67,14 @@ def get_prompt_registry() -> PromptRegistry:
     return _prompt_registry
 
 
-def get_llm(config: PlugMemConfig | None = None) -> LLMClient | LLMRouter:
-    """Return the LLM client(s).
+def get_llm(config: PlugMemConfig | None = None) -> LLMRouter:
+    """Return the singleton :class:`LLMRouter`.
 
-    If ``LLM_CONFIG_PATH`` points to a YAML file, an :class:`LLMRouter` with
-    per-role clients is returned.  Otherwise a single
-    :class:`OpenAICompatibleLLMClient` built from env vars is returned.
+    If ``LLM_CONFIG_PATH`` points to a YAML file, the router is loaded from
+    it. Otherwise a single :class:`OpenAICompatibleLLMClient` built from env
+    vars is wrapped via :meth:`LLMRouter.from_single_client` so callers that
+    need per-role swapping (e.g. the Pipeline tab in the inspector) always
+    get a router back.
     """
     global _llm_client
     if _llm_client is None:
@@ -83,12 +85,13 @@ def get_llm(config: PlugMemConfig | None = None) -> LLMClient | LLMRouter:
             _llm_client = LLMRouter.from_yaml(llm_config_path)
             logger.info("LLM routing loaded from %s", llm_config_path)
         else:
-            _llm_client = OpenAICompatibleLLMClient(
+            single = OpenAICompatibleLLMClient(
                 base_url=cfg.llm_base_url,
                 api_key=cfg.llm_api_key,
                 model=cfg.llm_model,
                 max_retries=cfg.max_retries,
             )
+            _llm_client = LLMRouter.from_single_client(single)
     return _llm_client
 
 

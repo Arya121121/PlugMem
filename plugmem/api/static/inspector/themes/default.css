@@ -1336,6 +1336,94 @@ details[open] summary { margin-bottom: var(--space); }
   border-radius: var(--radius-sm);
   font-size: var(--fs-small);
 }
+
+/* model editor */
+.model-editor {
+  margin-top: var(--space);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+.model-editor-title {
+  margin: 0;
+  font-size: var(--fs-h1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+.model-status code {
+  font-family: var(--font-mono);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--fg);
+}
+.model-editor input[type="url"],
+.model-editor input[type="text"],
+.model-editor input[type="password"] {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+.model-editor input:focus { outline: none; border-color: var(--accent); }
+
+.model-test-output {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  background: var(--bg);
+  font-size: var(--fs-small);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.model-test-output.ok    { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 6%, var(--bg-elev)); }
+.model-test-output.error { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 6%, var(--bg-elev)); }
+.model-test-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-test-line strong { font-size: var(--fs-small); }
+.model-test-output.ok .model-test-line strong { color: var(--ok); }
+.model-test-output.error .model-test-line strong { color: var(--danger); }
+.model-test-sample {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  max-height: 160px;
+  overflow: auto;
+  color: var(--fg);
+}
+.model-test-err {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--danger);
+}
 .pipeline-kv {
   display: grid;
   grid-template-columns: max-content 1fr;

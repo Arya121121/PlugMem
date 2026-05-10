@@ -11,9 +11,18 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
+import logging
+import time
+
 from plugmem.api.auth import require_api_key
-from plugmem.api.dependencies import get_graph_manager, get_prompt_registry
+from plugmem.api.dependencies import get_graph_manager, get_llm, get_prompt_registry
 from plugmem.api.schemas import (
+    ModelBinding,
+    ModelListResponse,
+    ModelTestRequest,
+    ModelTestResponse,
+    ModelUpdateRequest,
+    ModelUpdateResponse,
     PipelineSpecResponse,
     PromptInfo,
     PromptLayer,
@@ -25,9 +34,15 @@ from plugmem.api.schemas import (
     PromptUpdateRequest,
     PromptUpdateResponse,
 )
+from openai import AzureOpenAI, OpenAI
+
+from plugmem.clients.llm import OpenAICompatibleLLMClient
+from plugmem.clients.llm_router import ROLES as ROUTER_ROLES, LLMRouter
 from plugmem.core.pipeline_spec import to_dict as pipeline_spec_dict
 from plugmem.graph_manager import GraphManager
 from plugmem.prompts.registry import PromptRegistry, TemplatePrompt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"], dependencies=[Depends(require_api_key)])
 graph_router = APIRouter(prefix="/graphs", tags=["pipeline"], dependencies=[Depends(require_api_key)])
@@ -143,6 +158,120 @@ def reset_prompt(graph_id: str, name: str) -> PromptResetResponse:
         cleared=cleared,
         persisted_to=persisted,
         info=_to_info(name, registry, graph_id),
+    )
+
+
+# ------------------------------------------------------------------ #
+# Model bindings (Phase 3) — global, applies to all graphs
+# ------------------------------------------------------------------ #
+
+
+def _router() -> LLMRouter:
+    llm = get_llm()
+    if not isinstance(llm, LLMRouter):
+        # Defensive: the dependency now always returns a router, but if
+        # someone bypassed it we surface a clear error.
+        raise HTTPException(
+            status_code=503,
+            detail="LLM is not a router; per-role swap not available.",
+        )
+    return llm
+
+
+def _binding_from_summary(summary: dict) -> ModelBinding:
+    return ModelBinding(
+        role=summary["role"],
+        base_url=summary["base_url"],
+        model=summary["model"],
+        has_api_key=summary["has_api_key"],
+        is_azure=summary["is_azure"],
+        azure_api_version=summary.get("azure_api_version", "") or "",
+        falls_back_to_default=summary["falls_back_to_default"],
+    )
+
+
+@router.get("/models", response_model=ModelListResponse)
+def list_models() -> ModelListResponse:
+    """Snapshot of every router role's current binding (api_keys redacted)."""
+    summary = _router().role_summary()
+    bindings = [_binding_from_summary(summary[r]) for r in ROUTER_ROLES]
+    return ModelListResponse(bindings=bindings, roles=list(ROUTER_ROLES))
+
+
+@router.put("/models/{role}", response_model=ModelUpdateResponse)
+def update_model(role: str, body: ModelUpdateRequest) -> ModelUpdateResponse:
+    """Atomically swap the LLM bound to *role*.
+
+    Applies process-wide — all graphs that use this role on subsequent
+    calls will hit the new endpoint.
+    """
+    if role not in ROUTER_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown role '{role}'. Allowed: {list(ROUTER_ROLES)}",
+        )
+    try:
+        _router().set_role(
+            role,
+            base_url=body.base_url,
+            model=body.model,
+            api_key=body.api_key,
+            is_azure=body.is_azure,
+            azure_api_version=body.azure_api_version,
+        )
+    except Exception as e:  # noqa: BLE001 — surface client-construction errors verbatim
+        raise HTTPException(status_code=400, detail=f"set_role failed: {e}")
+    summary = _router().role_summary()[role]
+    return ModelUpdateResponse(role=role, binding=_binding_from_summary(summary))
+
+
+@router.post("/models/test", response_model=ModelTestResponse)
+def test_model(body: ModelTestRequest) -> ModelTestResponse:
+    """Probe a candidate {base_url, api_key, model} without mutating router state.
+
+    Builds a one-off client, runs a short ``complete([{user: prompt}])``, and
+    returns the first chunk + latency. Useful as a "Test connection" check
+    before committing a swap.
+    """
+    api_key = body.api_key
+    if api_key is None and body.role and body.role in ROUTER_ROLES:
+        # Reuse the role's existing key if the caller didn't re-type it.
+        summary = _router().role_summary()[body.role]
+        # role_summary doesn't expose the key; reach into the router directly.
+        existing = _router()._clients.get(body.role) or _router()._clients.get("default")
+        api_key = getattr(existing, "api_key", "") if existing else ""
+    if api_key is None:
+        api_key = ""
+
+    started = time.monotonic()
+    try:
+        # Bypass OpenAICompatibleLLMClient.complete — its retry loop swallows
+        # exceptions and returns "" on failure, which would mask connection
+        # errors as "ok with empty response". Call the SDK directly instead.
+        if body.is_azure:
+            sdk = AzureOpenAI(
+                azure_endpoint=body.base_url,
+                api_key=api_key,
+                api_version=body.azure_api_version,
+            )
+        else:
+            sdk = OpenAI(base_url=body.base_url, api_key=api_key)
+        resp = sdk.chat.completions.create(
+            model=body.model,
+            messages=[{"role": "user", "content": body.prompt}],
+            max_tokens=body.max_tokens,
+            temperature=0,
+        )
+        content = resp.choices[0].message.content or ""
+    except Exception as e:  # noqa: BLE001
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return ModelTestResponse(ok=False, latency_ms=elapsed_ms, error=str(e))
+
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    return ModelTestResponse(
+        ok=True,
+        latency_ms=elapsed_ms,
+        sample=content[:240],
     )
 
 
