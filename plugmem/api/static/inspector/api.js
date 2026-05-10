@@ -115,4 +115,6 @@ export const api = {
     request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/traces/cap`),
   setTraceCap: (gid, cap) =>
     request("PUT", `/graphs/${encodeURIComponent(gid)}/pipeline/traces/cap`, { body: { cap } }),
+  getPipelineStats: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/stats`),
 };

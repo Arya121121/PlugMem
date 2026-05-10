@@ -774,6 +774,57 @@ class ChromaStorage:
             "steps": steps,
         }
 
+    def aggregate_step_stats(self, graph_id: str) -> Dict[str, Dict[str, Any]]:
+        """Walk all stored traces and aggregate per-step-name stats.
+
+        Returns a dict keyed by ``StepRecord.name`` with::
+
+            {count, mean_latency_ms, errors, last_ts, last_latency_ms}
+        """
+        col = self._trace_col(graph_id)
+        try:
+            data = col.get(include=["documents", "metadatas"])
+        except Exception:
+            return {}
+        docs = data.get("documents") or []
+        metas = data.get("metadatas") or []
+
+        running: Dict[str, Dict[str, Any]] = {}
+        for doc, meta in zip(docs, metas):
+            try:
+                steps = json.loads(doc) if doc else []
+            except json.JSONDecodeError:
+                continue
+            ts = (meta or {}).get("ts", "") or ""
+            for s in steps:
+                name = s.get("name") or ""
+                if not name:
+                    continue
+                entry = running.setdefault(name, {
+                    "count": 0, "total": 0, "errors": 0,
+                    "last_ts": "", "last_latency_ms": 0,
+                })
+                latency = int(s.get("latency_ms") or 0)
+                entry["count"] += 1
+                entry["total"] += latency
+                if s.get("error"):
+                    entry["errors"] += 1
+                if ts > entry["last_ts"]:
+                    entry["last_ts"] = ts
+                    entry["last_latency_ms"] = latency
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for name, e in running.items():
+            out[name] = {
+                "name": name,
+                "count": e["count"],
+                "mean_latency_ms": int(e["total"] / e["count"]) if e["count"] else 0,
+                "errors": e["errors"],
+                "last_ts": e["last_ts"],
+                "last_latency_ms": e["last_latency_ms"],
+            }
+        return out
+
     def list_sessions(self, graph_id: str) -> List[str]:
         """Distinct session_ids that appear anywhere in the graph (nodes or recalls)."""
         seen: set = set()

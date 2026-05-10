@@ -603,6 +603,20 @@ class TraceCapRequest(BaseModel):
     )
 
 
+class PipelineStepStats(BaseModel):
+    name: str
+    count: int = 0
+    mean_latency_ms: int = 0
+    errors: int = 0
+    last_ts: str = ""
+    last_latency_ms: int = 0
+
+
+class PipelineStatsResponse(BaseModel):
+    graph_id: str
+    stats: Dict[str, PipelineStepStats] = Field(default_factory=dict)
+
+
 # ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #

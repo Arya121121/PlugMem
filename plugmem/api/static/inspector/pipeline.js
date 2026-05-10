@@ -72,13 +72,17 @@ export function mountPipeline({ container, getGraphId, toast }) {
   let currentGraphId = null;
   const promptInfoByName = new Map();
   const bindingByRole = new Map();
+  const statsByName = new Map();
   let activePromptStep = null;
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
   });
 
-  els.tracesRefresh?.addEventListener("click", () => { void refreshTraces(); });
+  els.tracesRefresh?.addEventListener("click", async () => {
+    await Promise.all([refreshTraces(), refreshStepStats()]);
+    if (xyflowMod) mountReactApp(xyflowMod);
+  });
   els.tracesCapSave?.addEventListener("click", async () => {
     const gid = getGraphId();
     if (!gid) return;
@@ -114,7 +118,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       spec = s;
       xyflowMod = mod;
       currentGraphId = getGraphId();
-      await Promise.all([refreshPromptInfo(), refreshModelInfo()]);
+      await Promise.all([refreshPromptInfo(), refreshModelInfo(), refreshStepStats()]);
       renderSidebar();
       void refreshTraces();
       mountReactApp(mod);
@@ -147,6 +151,20 @@ export function mountPipeline({ container, getGraphId, toast }) {
       for (const b of res.bindings || []) bindingByRole.set(b.role, b);
     } catch (err) {
       console.warn("listPipelineModels failed:", err);
+    }
+  }
+
+  async function refreshStepStats() {
+    statsByName.clear();
+    const gid = getGraphId();
+    if (!gid) return;
+    try {
+      const res = await api.getPipelineStats(gid);
+      for (const [name, s] of Object.entries(res.stats || {})) {
+        statsByName.set(name, s);
+      }
+    } catch (err) {
+      console.warn("getPipelineStats failed:", err);
     }
   }
 
@@ -360,6 +378,24 @@ export function mountPipeline({ container, getGraphId, toast }) {
           data.optional ? e("span", { className: "pipeline-card-flag" }, "optional") : null,
           data.has_graph_override ? e("span", { className: "pipeline-override-flag" }, "overridden") : null,
         ),
+        data.stats && data.stats.count > 0
+          ? e("div", { className: "pipeline-card-stats" },
+              e("span", { className: "pipeline-stat" },
+                e("span", { className: "pipeline-stat-label" }, "calls"),
+                e("span", { className: "pipeline-stat-val" }, String(data.stats.count)),
+              ),
+              e("span", { className: "pipeline-stat" },
+                e("span", { className: "pipeline-stat-label" }, "avg"),
+                e("span", { className: "pipeline-stat-val" }, `${data.stats.mean_latency_ms}ms`),
+              ),
+              data.stats.errors > 0
+                ? e("span", { className: "pipeline-stat is-err" },
+                    e("span", { className: "pipeline-stat-label" }, "err"),
+                    e("span", { className: "pipeline-stat-val" }, String(data.stats.errors)),
+                  )
+                : null,
+            )
+          : null,
         Hout,
       );
     }
@@ -448,7 +484,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       stage: StageNode,
     };
 
-    const { nodes, edges } = buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName);
+    const { nodes, edges } = buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName, statsByName);
 
     function App() {
       const onNodeClick = useCallback((_, node) => {
@@ -714,10 +750,12 @@ export function mountPipeline({ container, getGraphId, toast }) {
         <label class="prompt-field">
           <span class="prompt-field-label">System template</span>
           <textarea class="prompt-system" rows="6" spellcheck="false">${escapeHtml(startSystem)}</textarea>
+          <div class="prompt-detected-vars" data-source="system"></div>
         </label>
         <label class="prompt-field">
           <span class="prompt-field-label">User template</span>
           <textarea class="prompt-user" rows="12" spellcheck="false">${escapeHtml(startUser)}</textarea>
+          <div class="prompt-detected-vars" data-source="user"></div>
         </label>
         <label class="prompt-field">
           <span class="prompt-field-label">Preview variables (JSON)</span>
@@ -750,6 +788,54 @@ export function mountPipeline({ container, getGraphId, toast }) {
     const previewOut = root.querySelector(".prompt-preview-output");
     const previewList = root.querySelector(".prompt-preview-list");
     const errorEl = root.querySelector(".prompt-error");
+    const sysVarsEl = root.querySelector(".prompt-detected-vars[data-source='system']");
+    const usrVarsEl = root.querySelector(".prompt-detected-vars[data-source='user']");
+
+    function extractVarNames(text) {
+      const set = new Set();
+      const re = /\{(\w+)\}/g;
+      let m;
+      while ((m = re.exec(text || "")) !== null) set.add(m[1]);
+      return [...set];
+    }
+    function ensureVarInPreview(name) {
+      let parsed = {};
+      const raw = varsEl.value.trim();
+      if (raw) {
+        try { parsed = JSON.parse(raw); }
+        catch { /* leave existing text alone — user is mid-edit */ return; }
+      }
+      if (!Object.prototype.hasOwnProperty.call(parsed, name)) {
+        parsed[name] = "";
+        varsEl.value = JSON.stringify(parsed, null, 2);
+      }
+    }
+    function renderDetected(target, textarea) {
+      if (!target) return;
+      const names = extractVarNames(textarea.value);
+      target.innerHTML = "";
+      if (names.length === 0) {
+        target.innerHTML = `<span class="hint">No {placeholders} detected.</span>`;
+        return;
+      }
+      const head = document.createElement("span");
+      head.className = "hint";
+      head.textContent = "vars: ";
+      target.appendChild(head);
+      for (const n of names) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "prompt-var-chip";
+        chip.textContent = n;
+        chip.title = `Click to add "${n}" to preview variables`;
+        chip.addEventListener("click", () => ensureVarInPreview(n));
+        target.appendChild(chip);
+      }
+    }
+    renderDetected(sysVarsEl, sysEl);
+    renderDetected(usrVarsEl, usrEl);
+    sysEl.addEventListener("input", () => renderDetected(sysVarsEl, sysEl));
+    usrEl.addEventListener("input", () => renderDetected(usrVarsEl, usrEl));
 
     function showError(msg) {
       errorEl.textContent = msg;
@@ -856,7 +942,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         // Close any open prompt editor for the previous graph.
         els.detail.hidden = true;
         activePromptStep = null;
-        await refreshPromptInfo();
+        await Promise.all([refreshPromptInfo(), refreshStepStats()]);
         void refreshTraces();
         if (xyflowMod) mountReactApp(xyflowMod);
       }
@@ -865,7 +951,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
 }
 
 
-function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName) {
+function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName, statsByName) {
   const kinds = visibleKinds || new Set(ALL_KINDS);
   // Filter + contract: build effective steps + edges from the visible-kinds set.
   const { steps: effectiveSteps, edges: effectiveEdges } = contractGraph(
@@ -944,6 +1030,7 @@ function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName) {
       const promptInfo = step.prompt_name
         ? (promptByName?.get(step.prompt_name) || null)
         : null;
+      const stats = statsByName?.get(step.id) || null;
       nodes.push({
         id: step.id,
         type: step.kind,
@@ -955,6 +1042,7 @@ function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName) {
           ...step,
           step,
           has_graph_override: !!promptInfo?.has_graph_override,
+          stats,
         },
         style: { width: dims[0] },
       });

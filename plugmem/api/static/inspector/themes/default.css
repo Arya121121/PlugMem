@@ -1550,6 +1550,57 @@ details[open] summary { margin-bottom: var(--space); }
   flex-direction: column;
   gap: 2px;
 }
+
+/* prompt editor: detected variable chips + per-step run stats */
+.prompt-detected-vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.prompt-var-chip {
+  appearance: none;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  padding: 1px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.prompt-var-chip:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elev));
+}
+
+.pipeline-card-stats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  font-size: 10px;
+}
+.pipeline-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+.pipeline-stat-label {
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--fg-faint);
+  font-size: 9px;
+}
+.pipeline-stat-val {
+  color: var(--fg);
+  font-weight: 600;
+}
+.pipeline-stat.is-err .pipeline-stat-val { color: var(--danger); }
 .pipeline-kv {
   display: grid;
   grid-template-columns: max-content 1fr;

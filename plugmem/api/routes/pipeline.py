@@ -33,6 +33,8 @@ from plugmem.api.schemas import (
     PromptResetResponse,
     PromptUpdateRequest,
     PromptUpdateResponse,
+    PipelineStatsResponse,
+    PipelineStepStats,
     TraceCapRequest,
     TraceCapResponse,
     TraceDetailResponse,
@@ -319,6 +321,18 @@ def set_trace_cap(graph_id: str, body: TraceCapRequest) -> TraceCapResponse:
     gm = _check_graph_exists(graph_id)
     new_cap = gm.storage.set_pipeline_trace_cap(graph_id, body.cap)
     return TraceCapResponse(graph_id=graph_id, cap=new_cap)
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/stats",
+    response_model=PipelineStatsResponse,
+)
+def get_pipeline_stats(graph_id: str) -> PipelineStatsResponse:
+    """Per-step-name aggregates across all stored traces (count, mean latency, …)."""
+    gm = _check_graph_exists(graph_id)
+    raw = gm.storage.aggregate_step_stats(graph_id)
+    stats = {name: PipelineStepStats(**v) for name, v in raw.items()}
+    return PipelineStatsResponse(graph_id=graph_id, stats=stats)
 
 
 @graph_router.get(
