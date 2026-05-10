@@ -30,6 +30,52 @@ const PER_LABELS = {
 const EDITABLE_KINDS = ["llm", "template_render"];
 const ALL_KINDS = ["llm", "template_render", "embed", "compute", "storage", "branch", "loop_marker"];
 
+
+// ------------------------- helpers (pure, no closure deps) ------------------ //
+
+function _escapeHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function lineDiff(a, b) {
+  const al = (a || "").split("\n");
+  const bl = (b || "").split("\n");
+  const m = al.length, n = bl.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = al[i - 1] === bl[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const out = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && al[i - 1] === bl[j - 1]) {
+      out.push({ op: "=", line: al[i - 1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      out.push({ op: "+", line: bl[j - 1] }); j--;
+    } else {
+      out.push({ op: "-", line: al[i - 1] }); i--;
+    }
+  }
+  out.reverse();
+  return out;
+}
+
+function renderDiffHtml(before, after) {
+  const diff = lineDiff(before, after);
+  if (diff.every((d) => d.op === "=")) {
+    return `<div class="hint">No differences from builtin.</div>`;
+  }
+  return diff.map((d) => {
+    const cls = d.op === "+" ? "diff-add" : d.op === "-" ? "diff-del" : "diff-eq";
+    const sign = d.op === "+" ? "+" : d.op === "-" ? "-" : " ";
+    return `<div class="diff-row ${cls}"><span class="diff-sign">${sign}</span><span class="diff-line">${_escapeHtml(d.line) || "&nbsp;"}</span></div>`;
+  }).join("");
+}
+
 const KIND_LABELS = {
   llm: "LLM",
   template_render: "TEMPLATE",
@@ -262,8 +308,66 @@ export function mountPipeline({ container, getGraphId, toast }) {
         ${t.session_id ? `<dt>Session</dt><dd><code>${escapeHtml(t.session_id)}</code></dd>` : ""}
         ${t.error ? `<dt>Error</dt><dd class="pipeline-trace-fail">${escapeHtml(t.error)}</dd>` : ""}
       </dl>
+      <div class="trace-actions">
+        <button type="button" class="btn trace-rerun">Re-render with current prompts</button>
+        <span class="hint">Renders each step's prompt template against the original variables. No LLM calls.</span>
+      </div>
       <div class="pipeline-detail-section"><strong>Step timeline</strong>${stepsHtml || `<div class="hint">No LLM steps recorded.</div>`}</div>
     `;
+
+    const rerunBtn = els.detailBody.querySelector(".trace-rerun");
+    rerunBtn?.addEventListener("click", () => { void rerunTrace(t); });
+  }
+
+  async function rerunTrace(t) {
+    if (!t || !Array.isArray(t.steps)) return;
+    const gid = getGraphId();
+    if (!gid) { toast("Pick a graph first.", "warn"); return; }
+    if (!spec) { toast("Pipeline spec not loaded.", "warn"); return; }
+
+    // step.name → prompt_name (for both kind=llm and kind=template_render).
+    const promptByStepName = new Map();
+    for (const s of spec.steps) {
+      if (s.prompt_name) promptByStepName.set(s.id, s.prompt_name);
+    }
+
+    const stepEls = els.detailBody.querySelectorAll(".trace-step");
+    for (let i = 0; i < t.steps.length; i++) {
+      const step = t.steps[i];
+      const stepEl = stepEls[i];
+      if (!stepEl) continue;
+
+      const promptName = promptByStepName.get(step.name);
+      let block = stepEl.querySelector(".trace-rerun-out");
+      if (!block) {
+        block = document.createElement("div");
+        block.className = "trace-rerun-out trace-step-block";
+        stepEl.querySelector(".trace-step-body")?.appendChild(block);
+      }
+
+      if (!promptName) {
+        block.innerHTML = `<div class="prompt-block-label">Re-rendered (current prompts)</div><div class="hint">No registered prompt for <code>${escapeHtml(step.name)}</code> — the LLM call uses messages assembled upstream (e.g. reason_llm_call).</div>`;
+        continue;
+      }
+
+      block.innerHTML = `<div class="prompt-block-label">Re-rendered (current prompts)</div><div class="hint">Loading…</div>`;
+      try {
+        const res = await api.previewPipelinePrompt(gid, promptName, {
+          variables: step.variables || {},
+        });
+        let msgs = "";
+        for (const m of res.messages || []) {
+          msgs += `
+            <div class="prompt-preview-msg">
+              <div class="prompt-preview-role">${escapeHtml(m.role)}</div>
+              <pre class="prompt-preview-content">${escapeHtml(m.content)}</pre>
+            </div>`;
+        }
+        block.innerHTML = `<div class="prompt-block-label">Re-rendered (current prompts)</div>${msgs || `<div class="hint">No messages returned.</div>`}`;
+      } catch (err) {
+        block.innerHTML = `<div class="prompt-block-label">Re-rendered (current prompts)</div><div class="prompt-error">${escapeHtml(err.message)}</div>`;
+      }
+    }
   }
 
   function renderSidebar() {
@@ -353,6 +457,31 @@ export function mountPipeline({ container, getGraphId, toast }) {
       );
     }
 
+    function renderSparkline(e, latencies) {
+      if (!latencies || latencies.length === 0) return null;
+      const w = 80;
+      const h = 18;
+      const max = Math.max(1, ...latencies);
+      const slot = w / latencies.length;
+      const barW = Math.max(2, slot - 1);
+      return e("svg", {
+        className: "pipeline-sparkline",
+        width: w, height: h,
+        viewBox: `0 0 ${w} ${h}`,
+        preserveAspectRatio: "none",
+        "aria-hidden": "true",
+        title: `recent latencies: ${latencies.map((v) => v + "ms").join(", ")}`,
+      }, latencies.map((v, i) => {
+        const barH = Math.max(1, Math.round((v / max) * (h - 2)));
+        const x = i * slot;
+        const y = h - barH;
+        return e("rect", {
+          key: i, x, y, width: barW, height: barH,
+          fill: "currentColor",
+        });
+      }));
+    }
+
     function StepNode({ data, selected }) {
       const cls = ["pipeline-card", `kind-${data.kind}`,
                    selected ? "is-selected" : "",
@@ -394,6 +523,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
                     e("span", { className: "pipeline-stat-val" }, String(data.stats.errors)),
                   )
                 : null,
+              renderSparkline(e, data.stats.recent_latencies),
             )
           : null,
         Hout,
@@ -771,6 +901,21 @@ export function mountPipeline({ container, getGraphId, toast }) {
           <h4>Rendered messages</h4>
           <div class="prompt-preview-list"></div>
         </div>
+        <details class="prompt-diff">
+          <summary>Diff vs builtin <span class="hint">(line-based)</span></summary>
+          <div class="prompt-diff-section">
+            <div class="prompt-block-label">System</div>
+            <div class="prompt-diff-body" data-target="system"></div>
+          </div>
+          <div class="prompt-diff-section">
+            <div class="prompt-block-label">User</div>
+            <div class="prompt-diff-body" data-target="user"></div>
+          </div>
+        </details>
+        <details class="prompt-step-traces">
+          <summary>Recent calls (this step)</summary>
+          <div class="prompt-step-traces-list"><div class="hint">Loading…</div></div>
+        </details>
         <div class="prompt-error" hidden></div>
       </section>
     `;
@@ -836,6 +981,57 @@ export function mountPipeline({ container, getGraphId, toast }) {
     renderDetected(usrVarsEl, usrEl);
     sysEl.addEventListener("input", () => renderDetected(sysVarsEl, sysEl));
     usrEl.addEventListener("input", () => renderDetected(usrVarsEl, usrEl));
+
+    // Live diff vs builtin
+    const info = promptInfoByName.get(step.prompt_name);
+    const builtinSys = info?.builtin?.system || "";
+    const builtinUsr = info?.builtin?.user || "";
+    const diffSysEl = root.querySelector(".prompt-diff-body[data-target='system']");
+    const diffUsrEl = root.querySelector(".prompt-diff-body[data-target='user']");
+    function refreshDiff() {
+      if (diffSysEl) diffSysEl.innerHTML = renderDiffHtml(builtinSys, sysEl.value);
+      if (diffUsrEl) diffUsrEl.innerHTML = renderDiffHtml(builtinUsr, usrEl.value);
+    }
+    refreshDiff();
+    sysEl.addEventListener("input", refreshDiff);
+    usrEl.addEventListener("input", refreshDiff);
+
+    // Recent calls (this step) — fetch on demand once the editor mounts.
+    const stepTracesEl = root.querySelector(".prompt-step-traces-list");
+    if (stepTracesEl) {
+      const gid = getGraphId();
+      if (!gid) {
+        stepTracesEl.innerHTML = `<div class="hint">No graph selected.</div>`;
+      } else {
+        api.listStepTraces(gid, step.id, { limit: 10 }).then((res) => {
+          if (!res.traces || res.traces.length === 0) {
+            stepTracesEl.innerHTML = `<div class="hint">No recorded calls yet for <code>${escapeHtml(step.id)}</code>.</div>`;
+            return;
+          }
+          stepTracesEl.innerHTML = "";
+          for (const t of res.traces) {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = `pipeline-trace-row ${t.ok ? "ok" : "fail"}`;
+            row.innerHTML = `
+              <div class="pipeline-trace-row-head">
+                <span class="pipeline-trace-endpoint">${escapeHtml(t.endpoint)}</span>
+                <span class="hint">${escapeHtml(t.ts || "")}</span>
+              </div>
+              <div class="pipeline-trace-row-meta">
+                <span class="pipeline-trace-steps">${t.step_latency_ms} ms (this step)</span>
+                <span class="hint">${t.duration_ms} ms (total)</span>
+                ${t.step_error ? `<span class="pipeline-card-flag" title="${escapeAttr(t.step_error)}">err</span>` : ""}
+              </div>
+            `;
+            row.addEventListener("click", () => selectTrace(t.trace_id));
+            stepTracesEl.appendChild(row);
+          }
+        }).catch((err) => {
+          stepTracesEl.innerHTML = `<div class="hint">${escapeHtml(err.message)}</div>`;
+        });
+      }
+    }
 
     function showError(msg) {
       errorEl.textContent = msg;

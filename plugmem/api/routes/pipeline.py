@@ -35,6 +35,8 @@ from plugmem.api.schemas import (
     PromptUpdateResponse,
     PipelineStatsResponse,
     PipelineStepStats,
+    StepTraceSummary,
+    StepTracesResponse,
     TraceCapRequest,
     TraceCapResponse,
     TraceDetailResponse,
@@ -335,6 +337,22 @@ def get_pipeline_stats(graph_id: str) -> PipelineStatsResponse:
     raw = gm.storage.aggregate_step_stats(graph_id)
     stats = {name: PipelineStepStats(**v) for name, v in raw.items()}
     return PipelineStatsResponse(graph_id=graph_id, stats=stats)
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/steps/{step_name}/traces",
+    response_model=StepTracesResponse,
+)
+def list_step_traces(
+    graph_id: str, step_name: str, limit: int = 10,
+) -> StepTracesResponse:
+    """Recent trace summaries that include the named step."""
+    gm = _check_graph_exists(graph_id)
+    rows = gm.storage.list_traces_for_step(graph_id, step_name, limit=limit)
+    return StepTracesResponse(
+        graph_id=graph_id, step_name=step_name,
+        traces=[StepTraceSummary(**r) for r in rows],
+    )
 
 
 @graph_router.get(

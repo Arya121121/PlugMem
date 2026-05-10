@@ -1601,6 +1601,90 @@ details[open] summary { margin-bottom: var(--space); }
   font-weight: 600;
 }
 .pipeline-stat.is-err .pipeline-stat-val { color: var(--danger); }
+
+/* sparkline svg lives inside .pipeline-card-stats; uses currentColor */
+.pipeline-sparkline {
+  margin-left: auto;
+  color: var(--accent);
+  display: block;
+  height: 18px;
+  width: 80px;
+  flex: 0 0 auto;
+}
+
+/* prompt-editor diff section */
+.prompt-diff > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  padding: 4px 0;
+}
+.prompt-diff-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  margin-top: 6px;
+  overflow: hidden;
+}
+.prompt-diff-body {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px 8px;
+}
+.diff-row {
+  display: flex;
+  white-space: pre-wrap;
+}
+.diff-sign {
+  flex: 0 0 1.2em;
+  color: var(--fg-faint);
+  user-select: none;
+}
+.diff-line { flex: 1; }
+.diff-row.diff-add {
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg-elev));
+  color: var(--fg);
+}
+.diff-row.diff-add .diff-sign { color: var(--ok); }
+.diff-row.diff-del {
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-elev));
+  color: var(--fg);
+}
+.diff-row.diff-del .diff-sign { color: var(--danger); }
+.diff-row.diff-eq { color: var(--fg-muted); }
+
+/* recent calls inside prompt editor */
+.prompt-step-traces > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  padding: 4px 0;
+}
+.prompt-step-traces-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* re-run button + output on trace detail */
+.trace-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  flex-wrap: wrap;
+}
+.trace-rerun-out {
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+  margin-top: 4px;
+}
 .pipeline-kv {
   display: grid;
   grid-template-columns: max-content 1fr;

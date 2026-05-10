@@ -779,7 +779,11 @@ class ChromaStorage:
 
         Returns a dict keyed by ``StepRecord.name`` with::
 
-            {count, mean_latency_ms, errors, last_ts, last_latency_ms}
+            {count, mean_latency_ms, errors, last_ts, last_latency_ms,
+             recent_latencies}
+
+        ``recent_latencies`` is the last N (default 20) latency values, ordered
+        oldest → newest, suitable for sparkline rendering.
         """
         col = self._trace_col(graph_id)
         try:
@@ -788,6 +792,7 @@ class ChromaStorage:
             return {}
         docs = data.get("documents") or []
         metas = data.get("metadatas") or []
+        SPARK_LIMIT = 20
 
         running: Dict[str, Dict[str, Any]] = {}
         for doc, meta in zip(docs, metas):
@@ -803,6 +808,7 @@ class ChromaStorage:
                 entry = running.setdefault(name, {
                     "count": 0, "total": 0, "errors": 0,
                     "last_ts": "", "last_latency_ms": 0,
+                    "pairs": [],
                 })
                 latency = int(s.get("latency_ms") or 0)
                 entry["count"] += 1
@@ -812,9 +818,12 @@ class ChromaStorage:
                 if ts > entry["last_ts"]:
                     entry["last_ts"] = ts
                     entry["last_latency_ms"] = latency
+                entry["pairs"].append((ts, latency))
 
         out: Dict[str, Dict[str, Any]] = {}
         for name, e in running.items():
+            e["pairs"].sort(key=lambda p: p[0])
+            recent = [int(p[1]) for p in e["pairs"][-SPARK_LIMIT:]]
             out[name] = {
                 "name": name,
                 "count": e["count"],
@@ -822,8 +831,41 @@ class ChromaStorage:
                 "errors": e["errors"],
                 "last_ts": e["last_ts"],
                 "last_latency_ms": e["last_latency_ms"],
+                "recent_latencies": recent,
             }
         return out
+
+    def list_traces_for_step(
+        self, graph_id: str, step_name: str, limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Return recent trace summaries that include the named step."""
+        col = self._trace_col(graph_id)
+        try:
+            data = col.get(include=["documents", "metadatas"])
+        except Exception:
+            return []
+        docs = data.get("documents") or []
+        metas = data.get("metadatas") or []
+        rows: List[Dict[str, Any]] = []
+        for doc, meta in zip(docs, metas):
+            try:
+                steps = json.loads(doc) if doc else []
+            except json.JSONDecodeError:
+                continue
+            match = next((s for s in steps if s.get("name") == step_name), None)
+            if match is None:
+                continue
+            rows.append({
+                "trace_id": meta.get("trace_id", ""),
+                "ts": meta.get("ts", ""),
+                "endpoint": meta.get("endpoint", ""),
+                "duration_ms": int(meta.get("duration_ms") or 0),
+                "ok": bool(meta.get("ok")),
+                "step_latency_ms": int(match.get("latency_ms") or 0),
+                "step_error": match.get("error") or None,
+            })
+        rows.sort(key=lambda r: r.get("ts", "") or "", reverse=True)
+        return rows[: max(0, limit)]
 
     def list_sessions(self, graph_id: str) -> List[str]:
         """Distinct session_ids that appear anywhere in the graph (nodes or recalls)."""

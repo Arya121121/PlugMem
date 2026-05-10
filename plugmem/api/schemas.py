@@ -610,11 +610,28 @@ class PipelineStepStats(BaseModel):
     errors: int = 0
     last_ts: str = ""
     last_latency_ms: int = 0
+    recent_latencies: List[int] = Field(default_factory=list)
 
 
 class PipelineStatsResponse(BaseModel):
     graph_id: str
     stats: Dict[str, PipelineStepStats] = Field(default_factory=dict)
+
+
+class StepTraceSummary(BaseModel):
+    trace_id: str
+    ts: str
+    endpoint: str
+    duration_ms: int
+    ok: bool
+    step_latency_ms: int
+    step_error: Optional[str] = None
+
+
+class StepTracesResponse(BaseModel):
+    graph_id: str
+    step_name: str
+    traces: List[StepTraceSummary]
 
 
 # ------------------------------------------------------------------ #
