@@ -635,6 +635,30 @@ class StepTracesResponse(BaseModel):
 
 
 # ------------------------------------------------------------------ #
+# Pipeline binding (Phase 5.5)
+# ------------------------------------------------------------------ #
+
+
+class PipelineInfo(BaseModel):
+    name: str
+    description: str = ""
+
+
+class PipelineListResponse(BaseModel):
+    pipelines: List[PipelineInfo]
+    default: str
+
+
+class PipelineBindingResponse(BaseModel):
+    graph_id: str
+    pipeline: str
+
+
+class PipelineBindingRequest(BaseModel):
+    pipeline: str
+
+
+# ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
 

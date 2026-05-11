@@ -674,6 +674,32 @@ class ChromaStorage:
         )
         return cap
 
+    def get_pipeline_name(self, graph_id: str, *, default: str = "plugmem-default") -> str:
+        """Per-graph memory-pipeline binding (e.g. plugmem-default, naive-rag).
+
+        Stored alongside the trace cap in the ``_pipeline_settings`` collection.
+        """
+        col = self._trace_settings_col(graph_id)
+        data = col.get(ids=["pipeline_name"], include=["metadatas"])
+        metas = data.get("metadatas") or []
+        if not metas:
+            return default
+        return str(metas[0].get("name") or default)
+
+    def set_pipeline_name(self, graph_id: str, name: str) -> str:
+        col = self._trace_settings_col(graph_id)
+        name = (name or "").strip() or "plugmem-default"
+        try:
+            col.delete(ids=["pipeline_name"])
+        except Exception:
+            pass
+        col.add(
+            ids=["pipeline_name"],
+            documents=["pipeline_binding"],
+            metadatas=[{"name": name}],
+        )
+        return name
+
     def add_pipeline_trace(self, graph_id: str, record) -> str:
         """Persist one trace; enforce the retention cap by deleting oldest.
 

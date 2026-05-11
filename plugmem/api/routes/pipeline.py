@@ -33,6 +33,10 @@ from plugmem.api.schemas import (
     PromptResetResponse,
     PromptUpdateRequest,
     PromptUpdateResponse,
+    PipelineBindingRequest,
+    PipelineBindingResponse,
+    PipelineInfo,
+    PipelineListResponse,
     PipelineStatsResponse,
     PipelineStepStats,
     StepTraceSummary,
@@ -50,6 +54,11 @@ from plugmem.clients.llm import OpenAICompatibleLLMClient
 from plugmem.clients.llm_router import ROLES as ROUTER_ROLES, LLMRouter, expand_env_vars
 from plugmem.core.pipeline_spec import to_dict as pipeline_spec_dict
 from plugmem.graph_manager import GraphManager
+from plugmem.pipelines import (
+    DEFAULT_PIPELINE_NAME,
+    is_registered as pipeline_is_registered,
+    list_pipelines as list_registered_pipelines,
+)
 from plugmem.prompts.registry import PromptRegistry, TemplatePrompt
 
 logger = logging.getLogger(__name__)
@@ -105,6 +114,49 @@ def _to_info(name: str, registry: PromptRegistry, graph_id: str) -> PromptInfo:
 @router.get("/spec", response_model=PipelineSpecResponse)
 def get_pipeline_spec() -> PipelineSpecResponse:
     return PipelineSpecResponse(**pipeline_spec_dict())
+
+
+# ------------------------------------------------------------------ #
+# Pipeline binding (Phase 5.5) — global registry + per-graph selection
+# ------------------------------------------------------------------ #
+
+
+@router.get("/pipelines", response_model=PipelineListResponse)
+def list_pipelines_endpoint() -> PipelineListResponse:
+    """Available memory-pipeline implementations registered in this process."""
+    rows = list_registered_pipelines()
+    return PipelineListResponse(
+        pipelines=[PipelineInfo(**r) for r in rows],
+        default=DEFAULT_PIPELINE_NAME,
+    )
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline",
+    response_model=PipelineBindingResponse,
+)
+def get_graph_pipeline(graph_id: str) -> PipelineBindingResponse:
+    gm = _check_graph_exists(graph_id)
+    name = gm.storage.get_pipeline_name(graph_id)
+    return PipelineBindingResponse(graph_id=graph_id, pipeline=name)
+
+
+@graph_router.put(
+    "/{graph_id}/pipeline",
+    response_model=PipelineBindingResponse,
+)
+def set_graph_pipeline(graph_id: str, body: PipelineBindingRequest) -> PipelineBindingResponse:
+    gm = _check_graph_exists(graph_id)
+    if not pipeline_is_registered(body.pipeline):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown pipeline '{body.pipeline}'. "
+                f"Registered: {[p['name'] for p in list_registered_pipelines()]}"
+            ),
+        )
+    name = gm.storage.set_pipeline_name(graph_id, body.pipeline)
+    return PipelineBindingResponse(graph_id=graph_id, pipeline=name)
 
 
 # ------------------------------------------------------------------ #

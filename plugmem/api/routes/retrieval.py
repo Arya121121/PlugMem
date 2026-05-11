@@ -1,8 +1,5 @@
-"""Retrieve and Reason endpoints."""
+"""Retrieve / Reason / Consolidate endpoints — dispatch to the bound pipeline."""
 from __future__ import annotations
-
-from datetime import datetime, timezone
-from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -16,46 +13,9 @@ from plugmem.api.schemas import (
     RetrieveRequest,
     RetrieveResponse,
 )
-from plugmem.core.pipeline_trace import record_llm_step, trace_run
+from plugmem.core.pipeline_trace import trace_run
 from plugmem.graph_manager import GraphManager
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _write_audit(
-    graph,
-    *,
-    endpoint: str,
-    body,
-    audit: Dict[str, Any],
-    mode: str,
-    n_messages: int,
-) -> None:
-    """Best-effort audit write — never breaks the recall path."""
-    try:
-        graph.storage.add_recall(
-            graph.graph_id,
-            endpoint=endpoint,
-            ts=_now_iso(),
-            graph_time=graph.semantic_time,
-            session_id=getattr(body, "session_id", None),
-            observation=body.observation or "",
-            goal=body.goal or "",
-            subgoal=body.subgoal or "",
-            state=body.state or "",
-            task_type=body.task_type or "",
-            mode=mode,
-            next_subgoal=audit.get("next_subgoal", ""),
-            query_tags=audit.get("query_tags", []),
-            selected_semantic_ids=audit.get("selected_semantic_ids", []),
-            selected_procedural_ids=audit.get("selected_procedural_ids", []),
-            n_messages=n_messages,
-        )
-    except Exception:
-        # Don't let an audit-log failure break a working recall.
-        pass
+from plugmem.pipelines import get as get_pipeline
 
 router = APIRouter(prefix="/graphs", tags=["retrieval"], dependencies=[Depends(require_api_key)])
 
@@ -72,86 +32,53 @@ def _get_graph(graph_id: str):
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
 
 
+def _pipeline_for(graph_id: str):
+    name = _manager().storage.get_pipeline_name(graph_id)
+    return get_pipeline(name)
+
+
 @router.post("/{graph_id}/retrieve", response_model=RetrieveResponse)
 async def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
     graph = _get_graph(graph_id)
-
-    with trace_run(graph_id, "POST /retrieve", storage=graph.storage,
-                   session_id=getattr(body, "session_id", None)):
-        audit: Dict[str, Any] = {}
-        messages, variables, mode = graph.retrieve_memory(
-            goal=body.goal,
-            subgoal=body.subgoal,
-            state=body.state,
-            observation=body.observation,
-            time=body.time,
-            task_type=body.task_type,
-            mode=body.mode,
-            _audit=audit,
-        )
-        _write_audit(graph, endpoint="retrieve", body=body, audit=audit, mode=mode, n_messages=len(messages))
-
-    return RetrieveResponse(
-        mode=mode,
-        reasoning_prompt=messages,
-        variables=variables,
-    )
+    pipeline = _pipeline_for(graph_id)
+    with trace_run(
+        graph_id, f"POST /retrieve (pipeline={pipeline.name})",
+        storage=graph.storage,
+        session_id=getattr(body, "session_id", None),
+        meta={"pipeline": pipeline.name},
+    ):
+        try:
+            return pipeline.retrieve(graph, body)
+        except NotImplementedError as e:
+            raise HTTPException(status_code=501, detail=str(e))
 
 
 @router.post("/{graph_id}/reason", response_model=ReasonResponse)
 async def reason(graph_id: str, body: ReasonRequest) -> ReasonResponse:
-    import time as _time
     graph = _get_graph(graph_id)
-
-    with trace_run(graph_id, "POST /reason", storage=graph.storage,
-                   session_id=getattr(body, "session_id", None)):
-        audit: Dict[str, Any] = {}
-        messages, variables, mode = graph.retrieve_memory(
-            goal=body.goal,
-            subgoal=body.subgoal,
-            state=body.state,
-            observation=body.observation,
-            time=body.time,
-            task_type=body.task_type,
-            mode=body.mode,
-            _audit=audit,
-        )
-
-        reasoning_llm = getattr(graph, "reasoning_llm", graph.llm)
-        started = _time.monotonic()
-        reasoning = reasoning_llm.complete(messages=messages)
-        latency_ms = int((_time.monotonic() - started) * 1000)
-        record_llm_step(
-            name="reason_llm_call",
-            llm=reasoning_llm,
-            variables={"observation": body.observation or "", "mode": mode},
-            response=reasoning,
-            parsed={"reasoning": reasoning},
-            latency_ms=latency_ms,
-        )
-        _write_audit(graph, endpoint="reason", body=body, audit=audit, mode=mode, n_messages=len(messages))
-
-    return ReasonResponse(
-        mode=mode,
-        reasoning=reasoning,
-        reasoning_prompt=messages,
-    )
+    pipeline = _pipeline_for(graph_id)
+    with trace_run(
+        graph_id, f"POST /reason (pipeline={pipeline.name})",
+        storage=graph.storage,
+        session_id=getattr(body, "session_id", None),
+        meta={"pipeline": pipeline.name},
+    ):
+        try:
+            return pipeline.reason(graph, body)
+        except NotImplementedError as e:
+            raise HTTPException(status_code=501, detail=str(e))
 
 
 @router.post("/{graph_id}/consolidate", response_model=ConsolidateResponse)
 async def consolidate(graph_id: str, body: ConsolidateRequest) -> ConsolidateResponse:
     graph = _get_graph(graph_id)
-
-    with trace_run(graph_id, "POST /consolidate", storage=graph.storage):
-        stats = graph.update_semantic_subgraph(
-            merge_threshold=body.merge_threshold,
-            max_merges_per_node=body.max_merges_per_node,
-            max_candidates_per_tag=body.max_candidates_per_tag,
-            max_total_candidates=body.max_total_candidates,
-            min_credibility_to_keep_active=body.min_credibility_to_keep_active,
-            credibility_decay=body.credibility_decay,
-            only_update_recent_window=body.only_update_recent_window,
-            allow_merge_with_common_episodic_nodes=body.allow_merge_with_common_episodic_nodes,
-        )
-
-    return ConsolidateResponse(status="ok", stats=stats)
+    pipeline = _pipeline_for(graph_id)
+    with trace_run(
+        graph_id, f"POST /consolidate (pipeline={pipeline.name})",
+        storage=graph.storage,
+        meta={"pipeline": pipeline.name},
+    ):
+        try:
+            return pipeline.consolidate(graph, body)
+        except NotImplementedError as e:
+            raise HTTPException(status_code=501, detail=str(e))
