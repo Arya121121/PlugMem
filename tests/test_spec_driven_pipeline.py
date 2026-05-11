@@ -277,3 +277,355 @@ def test_listed_in_pipeline_registry(client):
     assert r.status_code == 200
     names = {p["name"] for p in r.json()["pipelines"]}
     assert "spec-driven" in names
+
+
+# ------------------------------------------------------------------ #
+# Phase 6.3 — ForEach loops
+# ------------------------------------------------------------------ #
+
+
+def test_foreach_loads(tmp_path):
+    """Minimal valid ForEach passes the loader."""
+    p = _write_yaml(tmp_path / "fe.pipeline.yaml", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: ["a", "b", "c"] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config:
+              item_var: x
+              outputs: { echoes: echo.value }
+            body:
+              - id: echo
+                type: Constant
+                config: { value: 42 }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables:
+                # Nested-dict ports require dict ref; use const for now.
+                # The body collects 'echoes' as a list.
+                const: {}
+    """)
+    g = load_yaml(p)
+    foreach = next(n for n in g.nodes if n.type == "ForEach")
+    assert foreach.body is not None
+    assert {b.id for b in foreach.body} == {"echo"}
+
+
+def test_foreach_rejects_input_in_body(tmp_path):
+    p = _write_yaml(tmp_path / "bad_body.pipeline.yaml", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: [1] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config: { item_var: x, outputs: { y: nested.value } }
+            body:
+              - { id: nested, type: Input }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: m }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    with pytest.raises(ValueError, match="body cannot contain"):
+        load_yaml(p)
+
+
+def test_foreach_rejects_cycle_in_body(tmp_path):
+    p = _write_yaml(tmp_path / "body_cycle.pipeline.yaml", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: [1] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config: { item_var: x, outputs: { y: a.messages } }
+            body:
+              - id: a
+                type: PromptRender
+                config: { prompt: reasoning_semantic }
+                inputs: { observation: b.messages, semantic_memory: { const: "" } }
+              - id: b
+                type: PromptRender
+                config: { prompt: reasoning_semantic }
+                inputs: { observation: a.messages, semantic_memory: { const: "" } }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: m }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    with pytest.raises(ValueError, match="cycle"):
+        load_yaml(p)
+
+
+def test_foreach_rejects_unknown_output_target(tmp_path):
+    p = _write_yaml(tmp_path / "bad_out.pipeline.yaml", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: [1] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config: { item_var: x, outputs: { y: ghost.value } }
+            body:
+              - id: echo
+                type: Constant
+                config: { value: 1 }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: m }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    with pytest.raises(ValueError, match="not a body node"):
+        load_yaml(p)
+
+
+def test_foreach_iter_var_collision_rejected(tmp_path):
+    p = _write_yaml(tmp_path / "var_collide.pipeline.yaml", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: [1] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config: { item_var: src, outputs: { y: echo.value } }
+            body:
+              - id: echo
+                type: Constant
+                config: { value: 1 }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: m }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    with pytest.raises(ValueError, match="collides"):
+        load_yaml(p)
+
+
+def _build_graph_for_executor(client, tmp_path, monkeypatch, gid, yaml_body):
+    """Helper: bind a graph to spec-driven and drop a YAML on disk."""
+    monkeypatch.setenv("PROMPTS_DIR", str(tmp_path))
+    r = client.post("/api/v1/graphs", json={"graph_id": gid})
+    assert r.status_code in (200, 201), r.text
+    r = client.put(f"/api/v1/graphs/{gid}/pipeline", json={"pipeline": "spec-driven"})
+    assert r.status_code == 200, r.text
+    _write_yaml(tmp_path / f"{gid}.pipeline.yaml", yaml_body)
+
+
+def _run_executor(graph_manager, tmp_path, gid, yaml_body, phase_inputs=None):
+    """Build a real MemoryGraph + run the executor directly, bypassing pydantic."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor
+
+    graph_manager.create_graph(gid)
+    graph = graph_manager.get_graph(gid)
+    p = _write_yaml(tmp_path / f"{gid}.pipeline.yaml", yaml_body)
+    spec = load_yaml(p)
+    executor = PipelineExecutor(spec, graph)
+    return executor.run(phase_inputs or {
+        "observation": "?", "goal": "", "subgoal": "", "state": "",
+        "task_type": "", "time": "", "mode": None,
+    })
+
+
+def test_foreach_iterates_constant_list_collected_to_output(graph_manager, tmp_path):
+    """A ForEach over a constant list collects body outputs into a list at the outer scope."""
+    out = _run_executor(graph_manager, tmp_path, "fe-const", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: ["alpha", "beta", "gamma"] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config:
+              item_var: x
+              outputs: { items_echoed: pass.value }
+            body:
+              - id: pass
+                type: Constant
+                config: { value: "ECHO" }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: loop.items_echoed
+    """)
+    assert out["variables"] == ["ECHO", "ECHO", "ECHO"]
+
+
+def test_foreach_records_each_iteration_as_distinct_trace_step(client, monkeypatch, tmp_path):
+    """LLMCall inside a ForEach gets one trace step per iteration, suffix-disambiguated."""
+    gid = "fe-trace"
+    _build_graph_for_executor(client, tmp_path, monkeypatch, gid, """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: ["t1", "t2"] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config:
+              item_var: tag
+              outputs: { rs: probe.raw }
+            body:
+              - id: probe
+                type: LLMCall
+                config: { prompt: get_subgoal, role: structuring }
+                inputs:
+                  goal: tag
+                  state: { const: "" }
+                  observation: { const: "" }
+                  action: { const: "" }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    r = client.post(f"/api/v1/graphs/{gid}/retrieve", json={"observation": "?", "mode": None})
+    assert r.status_code == 200, r.text
+    r = client.get(f"/api/v1/graphs/{gid}/pipeline/traces")
+    assert r.json()["traces"]
+    trace_id = r.json()["traces"][0]["trace_id"]
+    detail = client.get(f"/api/v1/graphs/{gid}/pipeline/traces/{trace_id}").json()
+    step_names = [s["name"] for s in detail["steps"]]
+    # Each iteration's probe call is recorded as probe#0, probe#1.
+    assert "probe#0" in step_names, step_names
+    assert "probe#1" in step_names, step_names
+
+
+def test_foreach_empty_list_produces_empty_outputs(graph_manager, tmp_path):
+    """ForEach over an empty list runs zero body iterations and emits empty lists."""
+    out = _run_executor(graph_manager, tmp_path, "fe-empty", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: src
+            type: Constant
+            config: { value: [] }
+          - id: loop
+            type: ForEach
+            inputs: { items: src.value }
+            config:
+              item_var: x
+              outputs: { vals: echo.value }
+            body:
+              - id: echo
+                type: Constant
+                config: { value: 1 }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: loop.vals
+    """)
+    assert out["variables"] == []
+
+
+def test_nested_foreach(graph_manager, tmp_path):
+    """Nested ForEach: outer over 2 items × inner over 3 items → 6 inner iterations."""
+    out = _run_executor(graph_manager, tmp_path, "fe-nested", """
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: outer_src
+            type: Constant
+            config: { value: ["A", "B"] }
+          - id: inner_src
+            type: Constant
+            config: { value: [1, 2, 3] }
+          - id: outer_loop
+            type: ForEach
+            inputs: { items: outer_src.value }
+            config:
+              item_var: outer_item
+              outputs: { groups: inner_loop.inner_vals }
+            body:
+              - id: inner_loop
+                type: ForEach
+                inputs: { items: inner_src.value }
+                config:
+                  item_var: inner_item
+                  outputs: { inner_vals: echo.value }
+                body:
+                  - id: echo
+                    type: Constant
+                    config: { value: "X" }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: outer_loop.groups
+    """)
+    # Outer ran twice; each iteration's inner produced ["X","X","X"].
+    assert out["variables"] == [["X", "X", "X"], ["X", "X", "X"]]
+
+
+def test_foreach_cap_enforced(client, monkeypatch, tmp_path):
+    """A list longer than MAX_LOOP_ITERATIONS yields a 422 (config error)."""
+    from plugmem.pipelines.spec_driven import MAX_LOOP_ITERATIONS
+
+    gid = "fe-cap"
+    _build_graph_for_executor(client, tmp_path, monkeypatch, gid, f"""
+        phase: retrieve
+        nodes:
+          - {{ id: in, type: Input }}
+          - id: src
+            type: Constant
+            config: {{ value: {list(range(MAX_LOOP_ITERATIONS + 1))} }}
+          - id: loop
+            type: ForEach
+            inputs: {{ items: src.value }}
+            config:
+              item_var: x
+              outputs: {{ vals: echo.value }}
+            body:
+              - id: echo
+                type: Constant
+                config: {{ value: 1 }}
+          - id: out
+            type: Output
+            inputs:
+              mode: {{ const: m }}
+              reasoning_prompt: {{ const: [] }}
+              variables: {{ const: {{}} }}
+    """)
+    r = client.post(f"/api/v1/graphs/{gid}/retrieve", json={"observation": "?", "mode": None})
+    assert r.status_code == 422, r.text
+    assert "exceeds MAX_LOOP_ITERATIONS" in r.json()["detail"]

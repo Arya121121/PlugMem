@@ -44,8 +44,10 @@ from plugmem.pipelines.default import PlugMemDefaultPipeline
 from plugmem.prompts.registry import PromptRegistry
 
 LLM_CALL_CAP = 20
+MAX_LOOP_ITERATIONS = 1000
 
-NODE_TYPES = {"Input", "Output", "LLMCall", "PromptRender", "Constant"}
+NODE_TYPES = {"Input", "Output", "LLMCall", "PromptRender", "Constant", "ForEach"}
+BODY_FORBIDDEN_TYPES = {"Input", "Output"}
 
 
 # ----------------------------------------------------------------------- #
@@ -59,6 +61,7 @@ class NodeSpec:
     type: str
     config: Dict[str, Any] = field(default_factory=dict)
     inputs: Dict[str, Any] = field(default_factory=dict)
+    body: Optional[List["NodeSpec"]] = None  # only set for ForEach nodes
 
 
 @dataclass
@@ -69,6 +72,46 @@ class PipelineGraph:
 
 def _is_const_ref(ref: Any) -> bool:
     return isinstance(ref, dict) and "const" in ref
+
+
+def _resolve_ref(
+    ref: Any,
+    env: Dict[str, Dict[str, Any]],
+    item_bindings: Dict[str, Any],
+    *,
+    hint: str = "",
+) -> Any:
+    """Resolve a single ref (string or const-dict) against env + item bindings.
+
+    Lookup order:
+      1. ``{const: <value>}``                → literal.
+      2. ``<item_var>[.path]``               → item_bindings.
+      3. ``<node_id>[.path]``                → env.
+
+    ``hint`` is included in error messages for traceability.
+    """
+    if _is_const_ref(ref):
+        return ref["const"]
+    if not isinstance(ref, str) or not ref:
+        raise ValueError(f"{hint}: bad reference {ref!r}")
+    parts = ref.split(".")
+    head, path = parts[0], parts[1:]
+    if head in item_bindings:
+        val: Any = item_bindings[head]
+    elif head in env:
+        val = env[head]
+    else:
+        raise ValueError(
+            f"{hint}: source {head!r} not in env or item bindings (ref={ref!r})"
+        )
+    for part in path:
+        if isinstance(val, dict) and part in val:
+            val = val[part]
+        else:
+            raise ValueError(
+                f"{hint}: cannot resolve {ref!r} — missing key {part!r}"
+            )
+    return val
 
 
 # ----------------------------------------------------------------------- #
@@ -91,31 +134,14 @@ def load_yaml(path: Path) -> PipelineGraph:
     if not isinstance(raw_nodes, list):
         raise ValueError("'nodes' must be a list")
 
-    nodes: List[NodeSpec] = []
-    seen: set = set()
-    for entry in raw_nodes:
-        if not isinstance(entry, dict):
-            raise ValueError(f"Bad node entry: {entry!r}")
-        nid = entry.get("id")
-        if not isinstance(nid, str) or not nid:
-            raise ValueError(f"Node missing 'id' or 'id' not a string: {entry!r}")
-        if nid in seen:
-            raise ValueError(f"Duplicate node id: {nid!r}")
-        seen.add(nid)
-        ntype = entry.get("type")
-        if ntype not in NODE_TYPES:
-            raise ValueError(
-                f"Node {nid!r}: unknown type {ntype!r} "
-                f"(allowed: {sorted(NODE_TYPES)})"
-            )
-        cfg = entry.get("config") or {}
-        if not isinstance(cfg, dict):
-            raise ValueError(f"Node {nid!r}: 'config' must be a dict")
-        ins = entry.get("inputs") or {}
-        if not isinstance(ins, dict):
-            raise ValueError(f"Node {nid!r}: 'inputs' must be a dict")
-        nodes.append(NodeSpec(id=nid, type=ntype, config=cfg, inputs=ins))
+    nodes = [_parse_node(entry, context="top-level") for entry in raw_nodes]
 
+    # Top-level structural constraints.
+    seen: set = set()
+    for n in nodes:
+        if n.id in seen:
+            raise ValueError(f"Duplicate node id: {n.id!r}")
+        seen.add(n.id)
     type_counts: Dict[str, int] = {}
     for n in nodes:
         type_counts[n.type] = type_counts.get(n.type, 0) + 1
@@ -124,29 +150,167 @@ def load_yaml(path: Path) -> PipelineGraph:
     if type_counts.get("Output", 0) != 1:
         raise ValueError("Exactly one Output node is required")
 
-    # Validate all input references resolve.
+    # Validate references (and recursively for ForEach bodies). Cycle
+    # detection happens via the topo sort below.
+    _validate_refs(nodes, allowed_ids=seen, item_vars=set(), context="top-level")
+    _topo_sort(nodes)
+
+    # Recurse into ForEach bodies: validate their refs against the
+    # union of outer ids + body ids + item_var, and ensure body topo
+    # sorts (no cycles within the body).
+    for n in nodes:
+        if n.type == "ForEach":
+            _validate_foreach(n, outer_ids=seen)
+
+    return PipelineGraph(phase=phase, nodes=nodes)
+
+
+def _parse_node(entry: Any, *, context: str) -> NodeSpec:
+    """Convert one YAML entry into a NodeSpec. Recurses for ForEach.body."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"{context}: bad node entry: {entry!r}")
+    nid = entry.get("id")
+    if not isinstance(nid, str) or not nid:
+        raise ValueError(f"{context}: node missing 'id' (or not a string): {entry!r}")
+    ntype = entry.get("type")
+    if ntype not in NODE_TYPES:
+        raise ValueError(
+            f"{context}: node {nid!r} has unknown type {ntype!r} "
+            f"(allowed: {sorted(NODE_TYPES)})"
+        )
+    cfg = entry.get("config") or {}
+    if not isinstance(cfg, dict):
+        raise ValueError(f"{context}: node {nid!r} 'config' must be a dict")
+    ins = entry.get("inputs") or {}
+    if not isinstance(ins, dict):
+        raise ValueError(f"{context}: node {nid!r} 'inputs' must be a dict")
+
+    body: Optional[List[NodeSpec]] = None
+    if ntype == "ForEach":
+        # ForEach: validate config + body shape; recurse into body parse.
+        if "items" not in ins:
+            raise ValueError(f"{context}: ForEach {nid!r}: inputs.items is required")
+        item_var = cfg.get("item_var")
+        if not isinstance(item_var, str) or not item_var:
+            raise ValueError(f"{context}: ForEach {nid!r}: config.item_var must be a non-empty string")
+        out_decls = cfg.get("outputs") or {}
+        if not isinstance(out_decls, dict):
+            raise ValueError(f"{context}: ForEach {nid!r}: config.outputs must be a dict")
+        for out_name, ref in out_decls.items():
+            if not isinstance(out_name, str) or not out_name:
+                raise ValueError(f"{context}: ForEach {nid!r}: bad output name {out_name!r}")
+            if not (isinstance(ref, str) and "." in ref):
+                raise ValueError(
+                    f"{context}: ForEach {nid!r}: output {out_name!r} must reference "
+                    f"a body node port like 'node.port', got {ref!r}"
+                )
+        raw_body = entry.get("body")
+        if not isinstance(raw_body, list) or not raw_body:
+            raise ValueError(f"{context}: ForEach {nid!r}: 'body' must be a non-empty list")
+        body = [_parse_node(b, context=f"ForEach {nid!r}.body") for b in raw_body]
+        # Body cannot contain Input/Output nodes.
+        for b in body:
+            if b.type in BODY_FORBIDDEN_TYPES:
+                raise ValueError(
+                    f"{context}: ForEach {nid!r}: body cannot contain {b.type!r} nodes"
+                )
+        # Local id uniqueness within body.
+        body_ids: set = set()
+        for b in body:
+            if b.id in body_ids:
+                raise ValueError(f"ForEach {nid!r}.body: duplicate node id {b.id!r}")
+            body_ids.add(b.id)
+
+    return NodeSpec(id=nid, type=ntype, config=cfg, inputs=ins, body=body)
+
+
+def _validate_refs(
+    nodes: List[NodeSpec],
+    *,
+    allowed_ids: set,
+    item_vars: set,
+    context: str,
+) -> None:
+    """Each input ref's head must resolve to an allowed id or item var.
+
+    Bare references (no ``.``) are valid only if they name a known
+    ``item_var`` — they bind to the whole per-iteration value.
+    """
     for n in nodes:
         for port, ref in n.inputs.items():
             if _is_const_ref(ref):
                 continue
-            if not isinstance(ref, str) or "." not in ref:
+            if not isinstance(ref, str) or not ref:
                 raise ValueError(
-                    f"Node {n.id!r} input {port!r}: bad reference {ref!r} "
-                    f"(expected 'node_id.port' or {{const: value}})"
+                    f"{context}: node {n.id!r} input {port!r}: bad reference {ref!r} "
+                    f"(expected 'node_id.port', a bare item_var, or {{const: value}})"
                 )
-            src_id = ref.split(".", 1)[0]
-            if src_id not in seen:
+            head = ref.split(".", 1)[0]
+            has_dot = "." in ref
+            if head in item_vars:
+                # Bare or dotted item-var ref is OK.
+                continue
+            if not has_dot:
                 raise ValueError(
-                    f"Node {n.id!r} input {port!r}: references unknown "
-                    f"node {src_id!r}"
+                    f"{context}: node {n.id!r} input {port!r}: bare reference "
+                    f"{ref!r} must be a known item_var (got: {sorted(item_vars)})"
                 )
+            if head in allowed_ids:
+                continue
+            raise ValueError(
+                f"{context}: node {n.id!r} input {port!r}: references unknown "
+                f"node {head!r}"
+            )
 
-    _topo_sort(nodes)  # raises ValueError on cycle / self-ref
-    return PipelineGraph(phase=phase, nodes=nodes)
+
+def _validate_foreach(node: NodeSpec, *, outer_ids: set) -> None:
+    """Validate one ForEach: body refs + cycle check + nested ForEach recursion."""
+    assert node.type == "ForEach" and node.body is not None
+    item_var = node.config["item_var"]
+    body_ids = {b.id for b in node.body}
+
+    # An item_var must not collide with any visible id at the body level.
+    if item_var in outer_ids or item_var in body_ids:
+        raise ValueError(
+            f"ForEach {node.id!r}: item_var {item_var!r} collides with an existing node id"
+        )
+
+    # Output declarations must reference body nodes.
+    for out_name, ref in node.config.get("outputs", {}).items():
+        head = ref.split(".", 1)[0]
+        if head not in body_ids:
+            raise ValueError(
+                f"ForEach {node.id!r}: output {out_name!r} references {head!r} "
+                f"which is not a body node"
+            )
+
+    allowed = outer_ids | body_ids
+    _validate_refs(node.body, allowed_ids=allowed, item_vars={item_var},
+                   context=f"ForEach {node.id!r}.body")
+
+    # Topo-sort body. Externals (outer + item_var) are skipped as deps.
+    _topo_sort(node.body, external_ids=outer_ids | {item_var})
+
+    # Recurse for nested ForEach.
+    nested_outer = outer_ids | body_ids | {item_var}
+    for b in node.body:
+        if b.type == "ForEach":
+            _validate_foreach(b, outer_ids=nested_outer)
 
 
-def _topo_sort(nodes: List[NodeSpec]) -> List[NodeSpec]:
-    """Kahn's algorithm. Returns execution order. Raises on cycles."""
+def _topo_sort(
+    nodes: List[NodeSpec],
+    *,
+    external_ids: Optional[set] = None,
+) -> List[NodeSpec]:
+    """Kahn's algorithm. Returns execution order. Raises on cycles.
+
+    ``external_ids`` (when given) is a set of identifiers that appear in
+    refs but live outside this scope — they're already evaluated, so they
+    don't count as dependencies. Used for ForEach body sorts where outer
+    nodes + the item_var are visible.
+    """
+    external_ids = external_ids or set()
     by_id = {n.id: n for n in nodes}
     incoming: Dict[str, set] = {n.id: set() for n in nodes}
     for n in nodes:
@@ -156,6 +320,10 @@ def _topo_sort(nodes: List[NodeSpec]) -> List[NodeSpec]:
             src_id = ref.split(".", 1)[0]
             if src_id == n.id:
                 raise ValueError(f"Node {n.id!r} references itself")
+            if src_id in external_ids:
+                continue
+            if src_id not in by_id:
+                continue
             incoming[n.id].add(src_id)
 
     queue = [nid for nid, deps in incoming.items() if not deps]
@@ -220,6 +388,9 @@ class PipelineExecutor:
         self.memory_graph = memory_graph
         self.llm_call_count = 0
         self._order = _topo_sort(self.graph.nodes)
+        # Stack of iteration indices for nested ForEach; used to disambiguate
+        # trace step names across iterations.
+        self._iter_stack: List[int] = []
 
     def run(self, phase_inputs: Dict[str, Any]) -> Dict[str, Any]:
         env: Dict[str, Dict[str, Any]] = {}
@@ -227,45 +398,103 @@ class PipelineExecutor:
             if node.type == "Input":
                 env[node.id] = dict(phase_inputs)
                 continue
-            resolved = self._resolve_inputs(node, env)
-            if node.type == "Output":
-                env[node.id] = resolved
-            elif node.type == "Constant":
-                env[node.id] = {"value": node.config.get("value")}
-            elif node.type == "PromptRender":
-                env[node.id] = self._render_prompt(node, resolved)
-            elif node.type == "LLMCall":
-                env[node.id] = self._call_llm(node, resolved)
-            else:
-                raise ValueError(f"Unknown node type {node.type!r}")
+            env[node.id] = self._eval_node(node, env, item_bindings={})
 
         out_node = next(n for n in self.graph.nodes if n.type == "Output")
         return env[out_node.id]
 
-    def _resolve_inputs(self, node: NodeSpec, env: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    # ----- per-node dispatcher (shared with body subgraph execution) -----
+
+    def _eval_node(
+        self,
+        node: NodeSpec,
+        env: Dict[str, Dict[str, Any]],
+        *,
+        item_bindings: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        resolved = self._resolve_inputs(node, env, item_bindings=item_bindings)
+        if node.type == "Output":
+            return resolved
+        if node.type == "Constant":
+            return {"value": node.config.get("value")}
+        if node.type == "PromptRender":
+            return self._render_prompt(node, resolved)
+        if node.type == "LLMCall":
+            return self._call_llm(node, resolved)
+        if node.type == "ForEach":
+            return self._run_foreach(node, resolved, env, item_bindings=item_bindings)
+        raise ValueError(f"Unknown node type {node.type!r}")
+
+    def _resolve_inputs(
+        self,
+        node: NodeSpec,
+        env: Dict[str, Dict[str, Any]],
+        *,
+        item_bindings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        item_bindings = item_bindings or {}
         out: Dict[str, Any] = {}
         for port, ref in node.inputs.items():
-            if _is_const_ref(ref):
-                out[port] = ref["const"]
-                continue
-            parts = ref.split(".")
-            src_id, path = parts[0], parts[1:]
-            src_env = env.get(src_id)
-            if src_env is None:
-                raise RuntimeError(
-                    f"Node {node.id}.{port}: source {src_id!r} not yet evaluated"
-                )
-            val: Any = src_env
-            for part in path:
-                if isinstance(val, dict) and part in val:
-                    val = val[part]
-                else:
-                    raise RuntimeError(
-                        f"Node {node.id}.{port}: cannot resolve {ref!r} "
-                        f"(missing key {part!r})"
-                    )
-            out[port] = val
+            out[port] = _resolve_ref(ref, env, item_bindings, hint=f"{node.id}.{port}")
         return out
+
+    # ----- ForEach -----
+
+    def _run_foreach(
+        self,
+        node: NodeSpec,
+        resolved_inputs: Dict[str, Any],
+        env: Dict[str, Dict[str, Any]],
+        *,
+        item_bindings: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        items_value = resolved_inputs.get("items")
+        if not isinstance(items_value, list):
+            raise ValueError(
+                f"ForEach {node.id!r}: 'items' must resolve to a list, "
+                f"got {type(items_value).__name__}"
+            )
+        if len(items_value) > MAX_LOOP_ITERATIONS:
+            raise ValueError(
+                f"ForEach {node.id!r}: {len(items_value)} items exceeds "
+                f"MAX_LOOP_ITERATIONS={MAX_LOOP_ITERATIONS}"
+            )
+        item_var: str = node.config["item_var"]
+        declared_outputs: Dict[str, str] = node.config.get("outputs") or {}
+        collected: Dict[str, List[Any]] = {name: [] for name in declared_outputs}
+
+        body_nodes = node.body or []
+        external_ids = set(env.keys()) | set(item_bindings.keys()) | {item_var}
+        body_order = _topo_sort(body_nodes, external_ids=external_ids)
+
+        for i, item in enumerate(items_value):
+            self._iter_stack.append(i)
+            try:
+                # Sub-env shadows over outer env so body nodes can read both.
+                sub_env: Dict[str, Dict[str, Any]] = dict(env)
+                sub_bindings: Dict[str, Any] = dict(item_bindings)
+                sub_bindings[item_var] = item
+                for body_node in body_order:
+                    sub_env[body_node.id] = self._eval_node(
+                        body_node, sub_env, item_bindings=sub_bindings,
+                    )
+                for out_name, ref in declared_outputs.items():
+                    val = _resolve_ref(
+                        ref, sub_env, sub_bindings,
+                        hint=f"{node.id}.outputs.{out_name}",
+                    )
+                    collected[out_name].append(val)
+            finally:
+                self._iter_stack.pop()
+
+        return collected
+
+    # ----- trace step name (suffixed by iter indices when inside a loop) -----
+
+    def _trace_step_name(self, node_id: str) -> str:
+        if not self._iter_stack:
+            return node_id
+        return node_id + "#" + "#".join(str(i) for i in self._iter_stack)
 
     def _registry(self) -> PromptRegistry:
         return self.memory_graph.prompts or PromptRegistry()
@@ -281,7 +510,7 @@ class PipelineExecutor:
 
     def _call_llm(self, node: NodeSpec, inputs: Dict[str, Any]) -> Dict[str, Any]:
         if self.llm_call_count >= LLM_CALL_CAP:
-            raise RuntimeError(
+            raise ValueError(
                 f"LLM call cap ({LLM_CALL_CAP}) exceeded for pipeline "
                 f"{self.graph.phase!r}"
             )
@@ -300,7 +529,7 @@ class PipelineExecutor:
         parser = PARSERS.get(prompt_name)
         parsed = parser(response) if parser else {"text": response}
         record_llm_step(
-            name=node.id,
+            name=self._trace_step_name(node.id),
             llm=llm,
             variables=inputs,
             response=response,

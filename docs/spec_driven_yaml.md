@@ -155,6 +155,69 @@ Emits a fixed value.
 
 Output: `value`. (For one-offs prefer the inline `{ const: ... }` shorthand.)
 
+### `ForEach`
+
+Iterates over a list input. Each element is bound to a per-iteration
+variable; the `body` subgraph runs once per element; declared outputs
+are collected across iterations into lists.
+
+```yaml
+- id: per_tag
+  type: ForEach
+  inputs:
+    items: plan.parsed.query_tags        # ref to a list-valued port
+  config:
+    item_var: tag                        # name bound inside the body
+    outputs:
+      analyses: analyze.raw              # → list[str]
+  body:
+    - id: analyze
+      type: LLMCall
+      config: { prompt: get_subgoal, role: retrieval }
+      inputs:
+        goal: tag                        # bare item_var ref → whole element
+        state: in.state                  # outer-scope refs still work
+        observation: in.observation
+        action: { const: "" }
+```
+
+**Inputs:**
+
+| Port | Type | Meaning |
+|---|---|---|
+| `items` | `list` | The list to iterate. Resolved once before the loop. |
+
+**Config:**
+
+| Key | Type | Meaning |
+|---|---|---|
+| `item_var` | str | Name bound to each element inside the body. References to `<item_var>` (bare) get the whole element; `<item_var>.<field>` walks dict keys. |
+| `outputs` | dict | `{<output_name>: "<body_node>.<port>"}`. After every iteration, each declared port is collected into a list under `<output_name>` at the outer scope. |
+
+**Outputs:** the keys named in `config.outputs`. Each is a list with one
+entry per iteration, in input order.
+
+**Body semantics:**
+
+- Body is its own closed subgraph (own topological sort).
+- Body nodes may reference outer-scope nodes (e.g. `in.observation`,
+  `plan.parsed.next_subgoal`) and the item var (e.g. `tag`).
+- Body cannot contain `Input` or `Output` nodes (those only exist at the
+  top level).
+- Nested `ForEach` is supported.
+
+**Trace recording:** `LLMCall` inside a body is recorded as
+`<body_node_id>#<iter_idx>` so each iteration's call appears as a
+distinct step in the Pipeline tab's traces panel. Nested loops chain:
+`<id>#<outer_i>#<inner_i>`.
+
+**Caps:**
+
+- A `ForEach` is rejected at runtime if `len(items) > MAX_LOOP_ITERATIONS`
+  (1000). The cap surfaces as a 422 from the route.
+- The global `LLM_CALL_CAP` (20 per pipeline run) still applies — a loop
+  that fans out an LLM call hits it sooner than a pure-compute loop.
+
 ## Tracing
 
 Every `LLMCall` executes inside the existing `PipelineTraceRecorder`
