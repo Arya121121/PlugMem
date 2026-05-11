@@ -1,183 +1,320 @@
-# Pipeline Inspector — Plan
+# Pipeline Inspector — Plan & Status
 
-A new **Pipeline** tab in the inspector that:
+Last updated 2026-05-11.
 
-1. Visualizes PlugMem's processing pipeline as a step-by-step diagram
-   (subgoal → reward → state → segment → semantic → procedural, plus
-   retrieval and consolidation paths).
-2. Per step: view/edit the prompt template and pick the LLM model.
-3. Shows recent traces of pipeline runs with the actual LLM I/O at each step.
+The Pipeline tab in the Memory Inspector lets users (a) visualize PlugMem's
+processing graph, (b) edit the prompts and LLM models used at each step,
+(c) inspect every run via captured traces, and (d) eventually replace the
+algorithm itself with a custom pipeline.
 
-## Resolved design decisions
+## Status
 
-- **Prompt persistence (Phase 2).** Edits persist to the per-graph YAML
-  layer at `{prompts_dir}/{graph_id}.yaml`. The shipped builtins (Python
-  classes in `plugmem/prompts/*.py`) and the service-wide
-  `{prompts_dir}/_defaults.yaml` are **read-only from the UI** — the API
-  must refuse writes to either. Reset = remove the entry from the per-graph
-  YAML so resolution falls back to the builtin.
-- **Runtime model swap (Phase 3).** Add `LLMRouter.set_role(role, cfg)`;
-  takes effect on the next call from that role. The model editor must offer
-  a **"Test connection"** action that issues a small one-off `complete()`
-  call against the candidate `{base_url, api_key, model}` *before* the user
-  commits the swap, and shows success/failure (latency + first chunk).
-- **Trace capture (Phase 4).** Always-on. The retention cap is a
-  **user-configurable per-graph setting** with a recommended default of
-  **N=100** runs, persisted to chroma collection
-  `{graph_id}_pipeline_trace`. Setting the cap to `0` means **unlimited**
-  (intended for testing — log everything). Settings UI lives in the
-  Pipeline tab.
-- **Visualization library (Phase 1+).** **xyflow** (`@xyflow/react`) +
-  React 18. Adopted now (not bespoke HTML) so the future "build your own
-  memory pipeline" feature has a real node-editor foundation. Cytoscape
-  stays reserved for the data graph.
-- **Distribution.** Vendored: a one-time esbuild step in
-  `vendor-build/` produces
-  `plugmem/api/static/inspector/vendor/xyflow-bundle.{js,css}`, both
-  committed. No runtime CDN, no build step in CI. Re-run on version bump.
+| Phase | Scope | State |
+|---|---|---|
+| 1   | Read-only pipeline diagram | shipped |
+| 1.5 | Exact spec (kinds, edges, branches, loops) + xyflow rewrite | shipped |
+| 2   | Per-graph prompt editing (CRUD + preview + side editor) | shipped |
+| 3   | Per-role model swap (`LLMRouter.set_role` + Test connection + env-var refs) | shipped |
+| 4   | Pipeline trace capture + display (configurable cap; default 100; 0 = unlimited) | shipped |
+| 5   | Polish (diff view, sparklines, recent calls, re-run with current prompts) | shipped |
+| 5.5 | Pluggable memory-pipeline implementations + `naive-rag` baseline | shipped |
+| 6.0 | Spec ↔ code drift checks (static AST lint + runtime trace check) | shipped |
+| 6.1 | Direction A — code→spec snapshot tool with `--check` for CI | shipped |
+| 6.2 | Direction B — `SpecDrivenPipeline` MVP: retrieve-only, YAML-driven | shipped |
+| **6.3** | **Loops in spec-driven pipelines (`ForEach` node)** | **in progress** |
+| 6.4 | Branch + Compute nodes in spec-driven pipelines | future |
+| 6.5 | Visual editor (xyflow) + non-destructive edits + Python hot-reload | future |
+| 6.6 | Spec-driven coverage of close / insert / consolidate phases | future |
 
----
+## Cross-cutting principles
 
-## Phase 1 — Read-only pipeline diagram
+These apply across phases. Codify behavior, not implementation.
 
-Foundation: the new tab renders the pipeline shape from a single source of
-truth. No editing yet.
+### Builtins are read-only
 
-**Backend**
+The shipped Python (inference functions, `plugmem-default` pipeline,
+`PromptRegistry` builtins, `_defaults.yaml`) is **never modified by the UI
+or API**. All user customization lives in per-graph YAML overlays or in
+forked pipeline copies.
 
-- New `plugmem/core/pipeline_spec.py` — declarative list of steps
-  `(id, label, prompt_name, role, inputs, outputs, phase)` for
-  `append | close | retrieve | consolidate`.
-- New `plugmem/api/routes/pipeline.py` with `GET /api/v1/pipeline/spec`.
-  Wire into [app.py](../plugmem/api/app.py).
-- Add `PipelineSpec` / `PipelineStep` to
-  [schemas.py](../plugmem/api/schemas.py).
+Enforcement: the prompt PUT endpoint refuses writes to anything except the
+per-graph layer; spec-driven YAMLs live alongside prompt overrides; new
+"user pipelines" must be assigned a fresh name, not overwrite a built-in.
 
-**Frontend**
+### Edits are non-destructive
 
-- New "Pipeline" tab in
-  [index.html](../plugmem/api/static/inspector/index.html); mount from
-  [app.js](../plugmem/api/static/inspector/app.js).
-- New `plugmem/api/static/inspector/pipeline.js`: phase columns, step cards,
-  edges. Click a card → empty right-panel placeholder.
-- Add `getPipelineSpec` to
-  [api.js](../plugmem/api/static/inspector/api.js).
+> "When a user makes changes through the visualization tool, make a copy
+> of the previous code and apply the changes there."
 
-**Done when**: opening the tab shows the full pipeline DAG and the side
-panel opens (empty) on click.
+When a user edits an existing pipeline (YAML or Python) via the editor:
 
----
+1. The current source is **copied** into a new versioned artifact.
+2. Edits land on the copy.
+3. The user can promote the copy to the graph's binding, keep it as a
+   draft, or discard it.
+4. The previous version remains on disk and is reachable for rollback.
 
-## Phase 2 — Prompt editing
+For Phase 6.2 (`SpecDrivenPipeline`), the YAML is on disk and easy to
+version. For Phase 6.5 (Python-backed pipelines via the visual editor),
+this requires real-time fork + hot-reload — see Phase 6.5 for the design.
 
-Decision needed before starting: prompt persistence (see above).
+### Spec is the source of truth (when it agrees with code)
 
-**Backend**
+The static lint (`tests/test_pipeline_spec_lint.py`) and runtime trace
+check (`tests/test_pipeline_spec_runtime.py`) guarantee the visualization
+is a 1-to-1 map of what the production code actually does. CI fails on
+drift; the snapshot tool (`plugmem/tools/spec_snapshot.py`) tells the
+developer exactly what to fix.
 
-- `GET    /api/v1/graphs/{graph_id}/pipeline/prompts` — list with builtin +
-  override + effective text.
-- `PUT    /api/v1/graphs/{graph_id}/pipeline/prompts/{name}` —
-  `{system, user, persist?}`; updates `PromptRegistry.set` (graph layer);
-  writes YAML if `persist`.
-- `POST   /api/v1/graphs/{graph_id}/pipeline/prompts/{name}/reset` — clears
-  override.
-- `POST   /api/v1/graphs/{graph_id}/pipeline/prompts/{name}/preview` —
-  renders `PromptBase.build_messages(variables)` without calling the LLM.
+### Pipelines are pluggable
 
-**Frontend**
-
-- Side panel "Prompt" tab: editable system + user textareas, variable list,
-  **Preview rendered**, Save / Reset / Save to YAML.
-- Status badge on each step card: builtin / overridden.
-
-**Done when**: editing a prompt changes the next pipeline run's behavior
-without restart, and Reset restores the builtin.
+Multiple memory algorithms can be hosted side-by-side. The
+`MemoryPipeline` protocol + `plugmem.pipelines` registry are the contract.
+Adding a baseline (RAG, naive, custom) is a class + a `register()` call;
+no edits to routes or the inspector.
 
 ---
 
-## Phase 3 — Model swap per role
+## Phase 6.3 — Loops (`ForEach`)
 
-Decision needed: runtime model swap (see above).
+**Goal**: let spec-driven pipelines iterate. Unlocks per-tag fan-out in
+retrieve (e.g. one LLM call per `get_plan.parsed.query_tags`) and is the
+foundation for close / insert / consolidate phases (which all loop in the
+production code).
 
-**Backend**
+### Node type
 
-- `LLMRouter.set_role(role, {base_url, api_key, model})` in
-  [llm_router.py](../plugmem/clients/llm_router.py): atomically constructs
-  and swaps the client.
-- `GET /api/v1/pipeline/models` — current roles, model, base_url (no key).
-- `PUT /api/v1/graphs/{graph_id}/pipeline/models/{role}` — body
-  `{base_url, api_key, model}`.
-- `POST /api/v1/pipeline/models/test` — body
-  `{base_url, api_key, model, prompt?}`. Issues a single short `complete()`
-  against the candidate config and returns
-  `{ok, latency_ms, sample, error?}`. Does **not** mutate router state.
+```yaml
+- id: per_tag
+  type: ForEach
+  config:
+    items: plan.parsed.query_tags        # ref to a list-valued port
+    item_var: tag                        # name bound inside the body
+    outputs:                             # what to collect across iterations
+      analyses: analyze.raw              # → list[str]
+  body:
+    - id: analyze
+      type: LLMCall
+      config: { prompt: get_subgoal, role: retrieval }
+      inputs: { goal: tag, state: in.state, observation: in.observation, action: { const: "" } }
+```
 
-**Frontend**
+### Semantics
 
-- Side panel "Model" tab: role dropdown + base_url/model/api_key inputs.
-- Step cards display the bound model in a badge.
+- `items` resolves to a list. Each element gets bound to `item_var` for
+  one iteration.
+- `body` is a closed subgraph with its own topo-sort. Body nodes can
+  reference outer nodes (e.g. `in.observation`, `plan.parsed.next_subgoal`)
+  and the per-iter var (e.g. `tag`).
+- `outputs` declares which body-node outputs to collect; each becomes a
+  list at the outer scope. `per_tag.analyses` is `list[str]` with length
+  equal to the number of iterations.
+- Empty `items` → outputs are empty lists (no error).
+- Body nodes cannot be `Input` or `Output` (those only exist at the top
+  level).
 
-**Done when**: changing a role's model in the UI causes the next call from
-that role to hit the new endpoint.
+### Implementation
 
----
+**`plugmem/pipelines/spec_driven.py` (~+150 LoC)**
+- Extend `NodeSpec` to allow a nested `body` field.
+- Loader: recognize `ForEach`; validate `items` ref, non-empty `item_var`,
+  body is a `list[NodeSpec]`, body topologically sortable, body has no
+  nested `Input`/`Output`, outer-scope refs allowed.
+- Executor: `_run_foreach`. For each item, build a sub-env that includes
+  outer-env + item_var binding, run body in topo order, collect declared
+  outputs into outer-env lists.
+- Trace step naming: body `LLMCall` recorded as `<body_node_id>#<iter_idx>`
+  so iterations don't collide in the trace UI.
+- Cap: `MAX_LOOP_ITERATIONS = 1000` per `ForEach` instance (in addition
+  to the existing `LLM_CALL_CAP = 20`).
 
-## Phase 4 — Pipeline trace capture & display
+**`tests/test_spec_driven_pipeline.py` (~+100 LoC, 6–7 new tests)**
+- Loader accepts a valid `ForEach`.
+- Loader rejects `Input` / `Output` nodes nested in `body`.
+- Loader rejects cycles within `body`.
+- Executor iterates a `Constant` list (deterministic, no LLM).
+- Executor iterates an `LLMCall.parsed.<list_port>` (chains with `get_plan`).
+- Nested `ForEach` works (body contains another `ForEach`).
+- Iteration cap raises a clear error.
 
-Decision needed: trace capture cap & opt-in (see above).
+**`docs/spec_driven_yaml.md` (~+40 lines)**: add `ForEach` to the node-type
+reference + a worked example.
 
-**Backend**
+### Out of scope for 6.3
 
-- New `plugmem/core/pipeline_trace.py` with `PipelineTraceRecorder`
-  (`start_run`, `step`, `finish`).
-- Thread an optional recorder through
-  [inference/structuring.py](../plugmem/inference/structuring.py) and
-  [inference/retrieving.py](../plugmem/inference/retrieving.py); orchestrate
-  from [core/memory.py](../plugmem/core/memory.py).
-- New chroma collection `{graph_id}_pipeline_trace` mirroring the
-  `add_recall` pattern in
-  [storage/chroma.py](../plugmem/storage/chroma.py).
-- `GET /api/v1/graphs/{graph_id}/pipeline/traces?limit=20`
-- `GET /api/v1/graphs/{graph_id}/pipeline/traces/{trace_id}`
-
-**Frontend**
-
-- Bottom traces strip: timestamps + outcome. Click → expandable timeline of
-  steps with input vars / raw response / parsed output / latency / model.
-
-**Done when**: every ingest and retrieval call produces a trace visible and
-inspectable in the UI.
-
----
-
-## Phase 6 — Future: user-defined memory pipelines
-
-Out of scope for the current PR — captured here so design decisions in
-Phases 1-5 stay compatible with it.
-
-- Let users **add / remove / reorder steps** and wire arbitrary dataflow.
-- Each step = an executable node. Build a small dataflow executor on top
-  of xyflow (~150-300 LoC: topo sort by edges → call each node's `compute`
-  → propagate). Add caching / async / partial recompute as actually
-  needed, instead of inheriting a generic engine.
-- Persist pipeline shape per graph alongside prompt + model overrides.
-- Versioning / templates so users can fork a pipeline.
-
-## Phase 5 — Polish
-
-Independent improvements; pick what's worth shipping.
-
-- Diff-against-builtin view in the prompt editor.
-- Variable placeholder highlighting in textareas.
-- "Recent calls" tab inside the side panel (filtered traces for that step).
-- Latency / token sparklines per step on the diagram.
-- "Re-run trace with current prompts" button on a past trace.
+- `Branch` node (Phase 6.4).
+- `Compute` node for list manipulation (filter / map / topk) (Phase 6.4).
+- Other accumulators (`last`, `count`) — only "collect into list" supported.
+- Body nodes leaking arbitrary references outward — only declared `outputs`
+  cross the loop boundary.
 
 ---
 
-## Out of scope
+## Phase 6.4 — Branch + Compute
 
-- Editing the pipeline shape itself (adding/reordering steps).
-- Multi-tenant prompt versioning / history (only current + reset-to-builtin).
-- Cross-harness sharing of prompt overrides — graphs are isolated per
-  harness.
+**Goal**: cover `insert` and `consolidate` phases, which both have
+conditional gating (subgoal-exists?, score≥threshold?) and need list
+operations (top-k, filter).
+
+### Node types
+
+- **`Branch`** — config: `condition` (ref to a bool-valued port).
+  Outputs: `then.*`, `else.*` route to different downstream subgraphs.
+  Validation: the two branches converge at some downstream node or each
+  branch terminates at `Output`.
+- **`Compute`** — config: `op` from a whitelist:
+  `similarity`, `top_k`, `filter_by`, `concat`, `count`, `slice`, `length`,
+  `head`, `tail`, `not`, `eq`, `lt`, `gt`, `and`, `or`.
+  Inputs / outputs per op; each op is ~5–10 LoC.
+
+### Why a whitelist (not arbitrary expressions)
+
+User-authored Python in the YAML is a security risk and a debugging
+nightmare. A small whitelist covers PlugMem's actual ops; extending it is
+one Python function each.
+
+### Open question
+
+`Branch` vs `Switch` (n-way). `Branch` first; `Switch` only if a real
+multi-way decision shows up in close/insert.
+
+---
+
+## Phase 6.5 — Visual editor + non-destructive edits + Python hot-reload
+
+This is the big one. Three intertwined capabilities.
+
+### A. Visual editor
+
+xyflow editor mode toggled from the Pipeline tab sidebar:
+
+- Drag-from-palette to add a node.
+- Click-and-drag to connect ports.
+- Per-node config in the existing right side panel (re-using prompt/model
+  editors where appropriate).
+- "Test run" button: execute the in-progress spec with a sample input,
+  show the trace inline.
+- "Save" / "Discard" / "Diff vs current" actions.
+
+### B. Non-destructive edits
+
+When the user clicks "Save", the system does **not** overwrite the bound
+pipeline's source. Instead:
+
+1. Read the current pipeline source (Python module **or** YAML).
+2. Compute a unique name like `<base>-fork-<timestamp>` or
+   `<base>-{graph_id}-{short_hash}`.
+3. Write a **copy** to a versioned location:
+   - YAML: `{prompts_dir}/.history/{name}.pipeline.yaml`
+   - Python: `data/pipelines/{name}/__init__.py` (full module)
+4. Apply the user's edits to the copy.
+5. Register the copy with the pipeline registry under the new name.
+6. (Atomically) flip the graph's binding to the new name.
+7. The previous version remains addressable for rollback.
+
+Rollback: a new endpoint `POST /graphs/{gid}/pipeline/rollback` reverts
+the graph's binding to the previous version in the chain. Audit log of
+"who saved what when" lives in chroma settings collection (already exists
+for trace cap; extend the schema).
+
+### C. Python hot-reload
+
+> "This means we need to be able to write and reload python code in real time."
+
+Implementing (B) for Python-backed pipelines requires loading and
+reloading Python modules at runtime without restarting the server.
+
+**Approach**:
+
+1. **Pipeline source layout**. Forked Python pipelines live under
+   `data/pipelines/{name}/` as importable packages. `__init__.py` exposes
+   a `Pipeline` class subclassing `MemoryPipeline`.
+2. **Dynamic registration**. A bootstrap scan at app startup imports
+   every package in `data/pipelines/` and registers it. New packages can
+   be added between requests.
+3. **Hot-reload endpoint**. `POST /api/v1/pipelines/reload` (or
+   `/api/v1/pipelines/{name}/reload`) calls `importlib.reload` on the
+   target package(s) and re-registers. Use this when:
+   - A developer edits Python on disk (no server restart needed).
+   - The visual editor just wrote a new fork.
+4. **Source-of-truth choice per pipeline**. A pipeline can declare its
+   storage format: `spec_yaml` (loaded each call) or `python` (loaded at
+   import, reloadable on demand).
+5. **Safety**: forked Python is sandboxed only to the extent that it
+   imports from `plugmem.*`. We do **not** attempt to block arbitrary
+   imports — researchers using their own server. Document the threat
+   model clearly.
+
+### Risks / open questions
+
+- **Arbitrary code execution**. Forked Python runs in-process with full
+  server privileges. Document and accept for the researcher use case;
+  add a `PLUGMEM_ENABLE_PYTHON_FORKS` env flag (default off in production
+  deployments).
+- **Module-level state**. `LLMRouter`, `PromptRegistry` singletons are
+  module-level. If a forked pipeline imports `plugmem.api.dependencies`,
+  hot-reload must not stomp the singletons. Keep singletons in a small,
+  rarely-reloaded module; forks import from there.
+- **Stale references**. After `importlib.reload`, existing references
+  to old classes still point at old code. The registry must re-fetch
+  the class on reload.
+- **Editor-to-Python mapping**. The visual editor produces YAML (Phase
+  6.2-6.4 model). Generating Python from the same model = an additional
+  emitter. Or: the editor only edits YAML, and the "Python fork" path is
+  reserved for hand-written code with a separate ergonomics surface.
+  TBD; lean toward "editor → YAML, Python fork is manual".
+
+### Phasing
+
+- **6.5a** — non-destructive edit infrastructure for spec-driven YAML
+  (versioned filesystem layout, rollback endpoint, audit log).
+- **6.5b** — visual editor MVP for retrieve-phase YAMLs (read-only canvas
+  becomes interactive; "Save" creates a versioned YAML).
+- **6.5c** — Python-backed forked pipelines + hot-reload.
+
+---
+
+## Phase 6.6 — Spec-driven for non-retrieve phases
+
+Once `ForEach` (6.3) and `Branch` + `Compute` (6.4) exist, extend the
+spec-driven YAML to model:
+
+- `close` — outer loop over trajectories, inner loop over steps, calls
+  `get_semantic` per step and `get_procedural` per trajectory.
+- `insert` — loop over procedural memories with a `Branch` on "subgoal
+  exists?".
+- `consolidate` — nested loop with a `Branch` on the merge-threshold
+  comparator.
+
+For each phase, drop the corresponding `_default.<phase>()` delegation
+in `SpecDrivenPipeline`.
+
+---
+
+## Cross-cutting roadmap items
+
+| Item | Phase |
+|---|---|
+| Drift checks block CI | 6.0 (shipped) |
+| Snapshot tool with `--check` | 6.1 (shipped) |
+| YAML-defined retrieve | 6.2 (shipped) |
+| Loops in YAML | 6.3 (in progress) |
+| Branch + Compute | 6.4 |
+| Non-destructive YAML versioning | 6.5a |
+| Visual editor | 6.5b |
+| Python hot-reload | 6.5c |
+| Spec-driven for close / insert / consolidate | 6.6 |
+
+## Decisions logged
+
+- Spec is hand-curated for `phase`, `role`, `description`, `per`, `kind`,
+  `edges`. AST-extractable fields (`prompt_name`, `inputs`, `outputs`)
+  are guarded by the lint + snapshot tool.
+- YAML lives alongside prompt overrides under `PROMPTS_DIR`.
+- Trace recorder is the single backbone for every pipeline implementation
+  (default, naive-rag, spec-driven). Adding a new pipeline gets the trace
+  panel + sparklines for free.
+- Pipeline binding is per-graph and persisted in the existing
+  `{graph_id}_pipeline_settings` chroma collection.
+- The "20 LLM calls per run" cap on `SpecDrivenPipeline` is hardcoded for
+  the MVP. Configurable later if needed.
