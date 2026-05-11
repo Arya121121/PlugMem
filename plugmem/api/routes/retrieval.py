@@ -51,6 +51,9 @@ async def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
             return pipeline.retrieve(graph, body)
         except NotImplementedError as e:
             raise HTTPException(status_code=501, detail=str(e))
+        except ValueError as e:
+            # Spec-driven pipeline raises this for missing/invalid YAML.
+            raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.post("/{graph_id}/reason", response_model=ReasonResponse)

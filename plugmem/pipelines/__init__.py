@@ -9,6 +9,7 @@ from __future__ import annotations
 from plugmem.pipelines.base import MemoryPipeline
 from plugmem.pipelines.default import PlugMemDefaultPipeline
 from plugmem.pipelines.naive_rag import NaiveRAGPipeline
+from plugmem.pipelines.spec_driven import SpecDrivenPipeline
 from plugmem.pipelines.registry import (
     DEFAULT_PIPELINE_NAME,
     get,
@@ -17,10 +18,10 @@ from plugmem.pipelines.registry import (
     register,
 )
 
-# Register built-ins. Order matters for collision warnings (last wins) but
-# both names are distinct so it doesn't actually matter here.
+# Register built-ins. Names are distinct so registration order is just docs.
 register(PlugMemDefaultPipeline())
 register(NaiveRAGPipeline())
+register(SpecDrivenPipeline())
 
 __all__ = [
     "MemoryPipeline",
