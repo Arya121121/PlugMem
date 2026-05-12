@@ -194,12 +194,48 @@ def _invalid_spec_driven_placeholder(error: str) -> Dict[str, Any]:
 
 
 def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
+    """Convert a parsed YAML pipeline graph into the inspector spec shape.
+
+    Body node ids are namespaced by their parent container's id (e.g. a
+    PromptRender ``r`` inside Branch ``render_reasoning_semantic``
+    becomes step id ``render_reasoning_semantic.r``). Without this,
+    multiple branches sharing a body node id (a perfectly valid YAML
+    pattern — body scopes are independent) collapse into a single
+    canvas node.
+
+    References from inside a body are resolved against three scopes,
+    in order: (a) local body siblings, (b) outer top-level ids,
+    (c) item_var bindings (skipped — they aren't first-class nodes).
+    """
     steps: List[Dict[str, Any]] = []
     edges: List[Dict[str, Any]] = []
     seen_kinds: set = set()
     seen_roles: set = set()
 
-    def walk(nodes: List[NodeSpec], parent_id: Optional[str]) -> None:
+    top_level_ids = {n.id for n in graph.nodes}
+
+    def display_id(local_id: str, parent_id: Optional[str]) -> str:
+        return f"{parent_id}.{local_id}" if parent_id else local_id
+
+    def resolve_ref_src(
+        ref_head: str, *,
+        local_ids: set, parent_id: Optional[str], item_vars: set,
+    ) -> Optional[str]:
+        """Map a ref's head id to a display id, or None if it doesn't refer
+        to a first-class node (item_var, unknown)."""
+        if ref_head in item_vars:
+            return None
+        if ref_head in local_ids:
+            return display_id(ref_head, parent_id)
+        if ref_head in top_level_ids:
+            return ref_head
+        return None
+
+    def walk(
+        nodes: List[NodeSpec], *,
+        parent_id: Optional[str], item_vars: set,
+    ) -> None:
+        local_ids = {n.id for n in nodes}
         for n in nodes:
             kind = _TYPE_TO_KIND.get(n.type, "compute")
             seen_kinds.add(kind)
@@ -214,17 +250,16 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
             inputs = list(n.inputs.keys())
             outputs = _outputs_for(n)
             description = _desc_for(n)
+            this_display = display_id(n.id, parent_id)
 
             steps.append(_step(
-                n.id, _label_for(n), description,
+                this_display, _label_for(n, parent_id=parent_id), description,
                 kind=kind, phase="retrieve",
                 prompt_name=prompt, role=role,
                 inputs=inputs, outputs=outputs,
-                branch_condition=(
-                    "Truthy?" if n.type == "Branch" else ""
-                ),
+                branch_condition=_branch_condition_label(n),
                 branch_outcomes=(
-                    ["yes → run body", "no  → emit else_value for each declared output"]
+                    ["yes → run body", "no  → emit else_value"]
                     if n.type == "Branch" else []
                 ),
                 loop_scope=(
@@ -239,11 +274,17 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
                     continue
                 if not isinstance(ref, str):
                     continue
-                src = ref.split(".", 1)[0]
-                # Only emit edges to already-declared step ids; we don't know
-                # outer-scope item-vars from inside a body, so skip those.
+                src_head = ref.split(".", 1)[0]
+                src_display = resolve_ref_src(
+                    src_head,
+                    local_ids=local_ids,
+                    parent_id=parent_id,
+                    item_vars=item_vars,
+                )
+                if src_display is None:
+                    continue
                 edges.append({
-                    "source": src, "target": n.id,
+                    "source": src_display, "target": this_display,
                     "kind": "seq", "label": port,
                 })
 
@@ -252,16 +293,21 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
                 edge_kind = "branch" if n.type == "Branch" else "seq"
                 for b in n.body:
                     edges.append({
-                        "source": n.id, "target": b.id,
+                        "source": this_display,
+                        "target": display_id(b.id, n.id),
                         "kind": edge_kind,
-                        "label": "body" if n.type == "Branch" else "iter",
+                        "label": "if true" if n.type == "Branch" else "iter",
                     })
-                walk(n.body, parent_id=n.id)
+                new_item_vars = set(item_vars)
+                if n.type == "ForEach":
+                    iv = n.config.get("item_var")
+                    if iv:
+                        new_item_vars.add(iv)
+                walk(n.body, parent_id=n.id, item_vars=new_item_vars)
 
-    walk(graph.nodes, parent_id=None)
+    walk(graph.nodes, parent_id=None, item_vars=set())
 
-    # Drop edges whose endpoints aren't known steps (cleans up item-var refs
-    # from inside loop bodies that reference outer scope by node id only).
+    # Drop edges whose endpoints aren't known steps (defensive).
     known = {s["id"] for s in steps}
     edges = [e for e in edges if e["source"] in known and e["target"] in known]
 
@@ -275,6 +321,18 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
         "roles": sorted(seen_roles) or ["retrieval"],
         "kinds": sorted(seen_kinds) or ["compute"],
     }
+
+
+def _branch_condition_label(n: NodeSpec) -> str:
+    """Human-readable condition text for Branch nodes."""
+    if n.type != "Branch":
+        return ""
+    cond = n.inputs.get("condition")
+    if isinstance(cond, str):
+        return f"{cond} truthy?"
+    if isinstance(cond, dict) and "const" in cond:
+        return f"{cond['const']!r} truthy?"
+    return "condition truthy?"
 
 
 # --------------------------------------------------------------------- #
@@ -351,7 +409,10 @@ def _retrieve_phase(description: str) -> Dict[str, Any]:
     }
 
 
-def _label_for(n: NodeSpec) -> str:
+def _label_for(n: NodeSpec, *, parent_id: Optional[str] = None) -> str:
+    # Body-local names like ``r`` are unhelpful — qualify them with the
+    # parent's id so the user sees ``render_reasoning_semantic.r`` etc.
+    qualified_id = f"{parent_id}.{n.id}" if parent_id else n.id
     if n.type == "LLMCall":
         return f"LLM · {n.config.get('prompt', n.id)}"
     if n.type == "PromptRender":
@@ -359,12 +420,16 @@ def _label_for(n: NodeSpec) -> str:
     if n.type == "Compute":
         return f"Compute · {n.config.get('op', '?')}"
     if n.type == "Constant":
-        return f"Constant · {n.id}"
+        return f"Constant · {qualified_id}"
     if n.type == "ForEach":
         iv = n.config.get("item_var", "item")
         return f"ForEach ({iv})"
     if n.type == "Branch":
-        return f"Branch · {n.id}"
+        return f"Branch · {qualified_id}"
+    if n.type == "Input":
+        return "Input"
+    if n.type == "Output":
+        return "Output"
     return n.type
 
 
