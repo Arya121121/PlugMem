@@ -1013,7 +1013,7 @@ def test_llmcall_rejects_both_prompt_and_messages(graph_manager, tmp_path):
     graph = load_yaml_str(yaml_text)
     graph_manager.create_graph("g-bad")
     mg = graph_manager.get_graph("g-bad")
-    with pytest.raises(ValueError, match="EITHER config.prompt OR"):
+    with pytest.raises(ValueError, match="exactly one of"):
         PipelineExecutor(graph, mg).run({"observation": "?"})
 
 
@@ -1039,5 +1039,158 @@ def test_llmcall_rejects_neither_prompt_nor_messages(graph_manager, tmp_path):
     graph = load_yaml_str(yaml_text)
     graph_manager.create_graph("g-empty")
     mg = graph_manager.get_graph("g-empty")
-    with pytest.raises(ValueError, match="must set either config.prompt"):
+    with pytest.raises(ValueError, match="must set one of"):
+        PipelineExecutor(graph, mg).run({"observation": "?"})
+
+
+# ----------------------------------------------------------------------- #
+# PromptRender now produces `value` (string) too
+# ----------------------------------------------------------------------- #
+
+
+def test_prompt_render_emits_value_string(graph_manager, tmp_path):
+    """PromptRender output includes a `value` port = finished template string."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: msgs
+            type: PromptRender
+            config: { prompt: reasoning_semantic }
+            inputs:
+              semantic_memory: { const: "Fact A" }
+              time: { const: "2026-05-12" }
+              observation: in.observation
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: msgs.messages
+              variables:
+                const: {}
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-render-value")
+    mg = graph_manager.get_graph("g-render-value")
+    executor = PipelineExecutor(graph, mg)
+    executor.run({"observation": "what's the date?"})
+    msgs_env = executor._eval_node  # no public env; re-run for value access
+    # Simpler: assert via direct call on _render_prompt.
+    node = next(n for n in graph.nodes if n.id == "msgs")
+    rendered = executor._render_prompt(node, {
+        "semantic_memory": "Fact A",
+        "time": "2026-05-12",
+        "observation": "what's the date?",
+    })
+    assert "value" in rendered and isinstance(rendered["value"], str)
+    assert "messages" in rendered and isinstance(rendered["messages"], list)
+    # The string contains substituted content.
+    assert "Fact A" in rendered["value"]
+    assert "what's the date?" in rendered["value"]
+
+
+# ----------------------------------------------------------------------- #
+# LLMCall text-mode (string in → user-message wrap → LLM)
+# ----------------------------------------------------------------------- #
+
+
+def test_llmcall_text_mode_wraps_string(graph_manager, tmp_path, fake_llm):
+    """LLMCall with inputs.text wraps the string as a user message."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: msgs
+            type: PromptRender
+            config: { prompt: reasoning_semantic }
+            inputs:
+              semantic_memory: { const: "" }
+              time: { const: "" }
+              observation: in.observation
+          - id: reason
+            type: LLMCall
+            config: { role: reasoning }
+            inputs:
+              text: msgs.value
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: reason.parsed
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-text-mode")
+    mg = graph_manager.get_graph("g-text-mode")
+    n_before = len(fake_llm.calls)
+    out = PipelineExecutor(graph, mg).run({"observation": "hello world"})
+    assert len(fake_llm.calls) - n_before == 1
+    sent = fake_llm.calls[-1]
+    assert isinstance(sent, list) and len(sent) == 1
+    assert sent[0]["role"] == "user"
+    assert "hello world" in sent[0]["content"]
+    assert "text" in out["variables"]
+
+
+def test_llmcall_rejects_text_and_messages_together(graph_manager, tmp_path):
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: msgs
+            type: PromptRender
+            config: { prompt: reasoning_semantic }
+            inputs:
+              semantic_memory: { const: "" }
+              time: { const: "" }
+              observation: in.observation
+          - id: bad
+            type: LLMCall
+            config: { role: reasoning }
+            inputs:
+              text: msgs.value
+              messages: msgs.messages
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-conflict")
+    mg = graph_manager.get_graph("g-conflict")
+    with pytest.raises(ValueError, match="exactly one of"):
+        PipelineExecutor(graph, mg).run({"observation": "?"})
+
+
+def test_llmcall_text_mode_rejects_non_string(graph_manager, tmp_path):
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: bad
+            type: LLMCall
+            config: { role: reasoning }
+            inputs:
+              text: { const: [1, 2, 3] }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-nostring")
+    mg = graph_manager.get_graph("g-nostring")
+    with pytest.raises(ValueError, match="inputs.text must be a string"):
         PipelineExecutor(graph, mg).run({"observation": "?"})

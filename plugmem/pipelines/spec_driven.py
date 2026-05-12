@@ -682,28 +682,42 @@ class PipelineExecutor:
         return self.memory_graph.prompts or PromptRegistry()
 
     def _render_prompt(self, node: NodeSpec, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Render a registered prompt into both a string and a messages list.
+
+        Outputs:
+        - ``value``    — the finished template as a single string. Each
+                         message's content is concatenated with a blank
+                         line between them. This is the "filled-in
+                         template" view: a pure ``vars → str`` function.
+        - ``messages`` — the same content broken into a list of
+                         ``{role, content}`` dicts, mirroring the prompt
+                         registry's structured output. Kept for callers
+                         that need role information (e.g. an LLMCall in
+                         messages-mode).
+        """
         prompt_name = node.config.get("prompt")
         if not prompt_name:
             raise ValueError(f"PromptRender {node.id!r}: config.prompt required")
         messages = self._registry().render_messages(
             prompt_name, inputs, graph_id=self.memory_graph.graph_id,
         )
-        return {"messages": messages}
+        value = "\n\n".join(
+            (m.get("content") if isinstance(m, dict) else "") or "" for m in messages
+        )
+        return {"messages": messages, "value": value}
 
     def _call_llm(self, node: NodeSpec, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Call the LLM.
+        """Call the LLM. Three input modes, exactly one must be configured.
 
-        Two modes:
-        - **Prompt-driven** (the original): ``config.prompt`` names a
-          registered prompt; ``inputs`` are the template variables. The
-          executor renders the messages internally, then calls the LLM.
-        - **Messages-driven**: ``inputs.messages`` is a pre-rendered
-          messages list (typically piped from an upstream ``PromptRender``
-          node). The executor skips rendering and calls the LLM directly.
-          This is what makes ``Template → LLM → Output`` chains
-          expressible — see ``sample_specs.py``.
-
-        Exactly one of the two modes must be configured per node.
+        - **Prompt-mode** (``config.prompt`` set): renders the named
+          registered prompt using ``inputs`` as template variables, then
+          calls the LLM.
+        - **Messages-mode** (``inputs.messages`` set): pre-rendered list
+          of ``{role, content}`` dicts is passed to the LLM verbatim.
+        - **Text-mode** (``inputs.text`` set): a single string is wrapped
+          as ``[{role: "user", content: text}]`` and passed to the LLM.
+          This is the natural pairing for ``PromptRender.value`` (the
+          finished template as a string).
         """
         if self.llm_call_count >= LLM_CALL_CAP:
             raise ValueError(
@@ -713,27 +727,38 @@ class PipelineExecutor:
         self.llm_call_count += 1
         prompt_name = node.config.get("prompt")
         role = node.config.get("role", "default")
-        explicit_messages = inputs.get("messages")
         has_messages_input = "messages" in node.inputs
-        if prompt_name and has_messages_input:
+        has_text_input = "text" in node.inputs
+        modes_set = sum([bool(prompt_name), has_messages_input, has_text_input])
+        if modes_set > 1:
             raise ValueError(
-                f"LLMCall {node.id!r}: set EITHER config.prompt OR "
-                f"inputs.messages, not both"
+                f"LLMCall {node.id!r}: set exactly one of "
+                f"config.prompt, inputs.messages, inputs.text"
             )
-        if not prompt_name and not has_messages_input:
+        if modes_set == 0:
             raise ValueError(
-                f"LLMCall {node.id!r}: must set either config.prompt "
-                f"(prompt-driven) or inputs.messages (messages-driven)"
+                f"LLMCall {node.id!r}: must set one of "
+                f"config.prompt (prompt-mode), inputs.messages "
+                f"(messages-mode), or inputs.text (text-mode)"
             )
 
         llm = self.memory_graph._router.for_role(role)
         if has_messages_input:
+            explicit_messages = inputs["messages"]
             if not isinstance(explicit_messages, list):
                 raise ValueError(
                     f"LLMCall {node.id!r}: inputs.messages must be a list, "
                     f"got {type(explicit_messages).__name__}"
                 )
             messages = explicit_messages
+        elif has_text_input:
+            text = inputs["text"]
+            if not isinstance(text, str):
+                raise ValueError(
+                    f"LLMCall {node.id!r}: inputs.text must be a string, "
+                    f"got {type(text).__name__}"
+                )
+            messages = [{"role": "user", "content": text}]
         else:
             messages = self._registry().render_messages(
                 prompt_name, inputs, graph_id=self.memory_graph.graph_id,

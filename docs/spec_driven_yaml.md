@@ -108,9 +108,9 @@ variables          # dict (free-form trace metadata)
 
 ### `LLMCall`
 
-Calls the LLM. Two modes:
+Calls the LLM. Three modes — exactly one must be set per node:
 
-**Prompt-driven** — name a registered prompt; the executor renders the
+**Prompt-mode** — name a registered prompt; the executor renders the
 messages from your inputs as template variables, then calls the LLM:
 
 ```yaml
@@ -122,21 +122,31 @@ messages from your inputs as template variables, then calls the LLM:
   inputs: { ... }         # template variables (must match what the prompt expects)
 ```
 
-**Messages-driven** — feed a pre-rendered messages list directly. The
-executor skips rendering and calls the LLM with those messages. This is
-how `Template → LLM → Output` chains are expressed (the templating
-happens in a `PromptRender` upstream):
+**Text-mode** — feed a single rendered string; the executor wraps it as
+`[{role: "user", content: <string>}]` before calling the LLM. This is
+the natural pairing for `PromptRender.value`:
 
 ```yaml
 - id: reason
   type: LLMCall
-  config: { role: reasoning }  # no `prompt` key — that's the cue
+  config: { role: reasoning }  # no `prompt` key
   inputs:
-    messages: msgs.messages    # ref to a list[{role, content}] port
+    text: rendered.value       # a string port (e.g. PromptRender.value)
 ```
 
-Exactly one of the two modes must be configured. Setting both `config.prompt`
-**and** `inputs.messages` is a load-time error.
+**Messages-mode** — feed a pre-rendered list of `{role, content}` dicts
+directly:
+
+```yaml
+- id: reason
+  type: LLMCall
+  config: { role: reasoning }
+  inputs:
+    messages: rendered.messages  # a list port (e.g. PromptRender.messages)
+```
+
+Setting more than one of `config.prompt`, `inputs.text`, `inputs.messages`
+is a load-time error.
 
 Outputs (same in both modes):
 

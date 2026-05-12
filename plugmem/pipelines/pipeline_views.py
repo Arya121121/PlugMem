@@ -471,7 +471,9 @@ def _outputs_for(n: NodeSpec) -> List[str]:
     if n.type == "LLMCall":
         return ["raw", "parsed.*"]
     if n.type == "PromptRender":
-        return ["messages"]
+        # ``value`` is the rendered template as a single string;
+        # ``messages`` is the same content as a list[{role, content}].
+        return ["value", "messages"]
     if n.type == "Constant":
         return ["value"]
     if n.type == "Compute":

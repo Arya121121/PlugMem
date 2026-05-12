@@ -151,11 +151,11 @@ def test_sample_yaml_validates(client):
             "render_reasoning_semantic", "render_reasoning_procedural",
             "render_reasoning_episodic",
             "reason_llm_call", "out"} <= top_level
-    # reason_llm_call is in messages mode (no config.prompt).
+    # reason_llm_call is in text-mode (no config.prompt; inputs.text).
     reason = next(n for n in g.nodes if n.id == "reason_llm_call")
     assert reason.type == "LLMCall"
     assert "prompt" not in (reason.config or {}) or not reason.config.get("prompt")
-    assert "messages" in reason.inputs
+    assert "text" in reason.inputs
 
 
 def test_sample_yaml_runs_end_to_end(client, monkeypatch, tmp_path):
@@ -176,4 +176,7 @@ def test_sample_yaml_runs_end_to_end(client, monkeypatch, tmp_path):
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["reasoning_prompt"]
+    # The sample uses LLMCall text-mode and ships the answer via
+    # variables.text — reasoning_prompt stays empty.
+    assert body["mode"] == "semantic_memory"
+    assert "text" in body["variables"]

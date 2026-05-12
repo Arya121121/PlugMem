@@ -13,22 +13,27 @@ from __future__ import annotations
 #
 # Top-level node IDs intentionally mirror ``plugmem.core.pipeline_spec``:
 #
-#   get_plan                           (LLMCall)
-#   get_mode                           (LLMCall)
+#   get_plan                           (LLMCall, prompt-mode)
+#   get_mode                           (LLMCall, prompt-mode)
 #   retrieve_semantic_nodes            (Compute placeholder)
 #   retrieve_procedural_nodes          (Compute placeholder)
 #   retrieve_episodic_nodes            (Compute placeholder)
 #   render_reasoning_semantic          (Branch wrapping PromptRender)
 #   render_reasoning_procedural        (Branch wrapping PromptRender)
 #   render_reasoning_episodic          (Branch wrapping PromptRender)
-#   reason_llm_call                    (LLMCall consuming the rendered messages)
+#   reason_llm_call                    (LLMCall, text-mode)
 #
-# Each ``render_reasoning_*`` body uses a ``PromptRender`` to build the
-# messages for that mode. The branches collapse to a single messages
-# list via two ``Compute(concat)`` nodes. The final ``reason_llm_call``
-# is an LLMCall in **messages mode** — ``inputs.messages`` is wired to
-# the merged messages, so the LLM sees exactly the rendered prompt and
-# returns a response that flows into the Output's ``variables``.
+# Each ``render_reasoning_*`` body is a ``PromptRender`` node. Its
+# ``value`` output is the **finished template as a single string** —
+# variables substituted in, ready to send to an LLM. The branches
+# collapse those strings into one via two ``Compute(concat)`` nodes
+# (concat over strings = string concatenation; inactive branches emit
+# the empty string, so only the active branch contributes).
+#
+# ``reason_llm_call`` uses LLMCall's text-mode: ``inputs.text`` is the
+# finished rendered string, which the executor wraps as a single user
+# message before calling the LLM. The result flows into the Output's
+# ``variables``.
 #
 # The MVP grammar has no StorageRead / Embed node; the
 # ``retrieve_*_nodes`` steps are Compute(concat) stubs whose inputs
@@ -40,14 +45,14 @@ PLUGMEM_DEFAULT_RETRIEVE_YAML = """\
 # Flow:
 #   get_plan + get_mode (both always run, parallel by data deps)
 #     → retrieve_*_nodes (stubs — would hit storage in production)
-#     → ONE of three reasoning_* templates renders, gated by mode
-#     → reason_llm_call consumes the rendered messages and produces an answer
-#     → Output ships {mode, reasoning_prompt: <messages>, variables: <answer>}
+#     → ONE of three reasoning_* templates renders to a STRING, gated by mode
+#     → reason_llm_call (text-mode) wraps that string as a user message
+#     → Output ships {mode, reasoning_prompt: <empty>, variables: <answer>}
 #
-# The reason_llm_call uses LLMCall's "messages mode": inputs.messages
-# is wired to the merged rendered messages, so the LLM call is an
-# explicit step in the graph rather than hidden inside the template
-# render. Storage fetches are Compute(concat) stubs (Phase 6.6).
+# Each Template node is a `vars → str` function: the `value` port is
+# the finished template with all fields filled in. Empty branches emit
+# the empty string, so the final concat collapses to the single string
+# that the active branch produced.
 phase: retrieve
 
 nodes:
@@ -114,13 +119,15 @@ nodes:
       a: get_mode.parsed.mode
       b: { const: episodic_memory }
 
-  # --- Template rendering, one per mode. Body emits `messages`. ---
+  # --- Template rendering, one per mode.
+  #     Body emits ``render.value`` (a STRING — the finished template).
+  #     Inactive branches emit the empty string. ---
   - id: render_reasoning_semantic
     type: Branch
     inputs: { condition: is_semantic.value }
     config:
-      outputs: { messages: render.messages }
-      else_value: { const: [] }
+      outputs: { rendered: render.value }
+      else_value: { const: "" }
     body:
       - id: render
         type: PromptRender
@@ -134,8 +141,8 @@ nodes:
     type: Branch
     inputs: { condition: is_procedural.value }
     config:
-      outputs: { messages: render.messages }
-      else_value: { const: [] }
+      outputs: { rendered: render.value }
+      else_value: { const: "" }
     body:
       - id: render
         type: PromptRender
@@ -148,8 +155,8 @@ nodes:
     type: Branch
     inputs: { condition: is_episodic.value }
     config:
-      outputs: { messages: render.messages }
-      else_value: { const: [] }
+      outputs: { rendered: render.value }
+      else_value: { const: "" }
     body:
       - id: render
         type: PromptRender
@@ -159,37 +166,39 @@ nodes:
           time: in.time
           question: in.observation
 
-  # --- Collapse the three optional branches into one messages list. ---
-  - id: messages_sem_proc
+  # --- Collapse the three optional renders into one string.
+  #     Compute(concat) on strings is string concatenation; two of the
+  #     three branches contributed the empty string. ---
+  - id: rendered_sem_proc
     type: Compute
     config: { op: concat }
     inputs:
-      a: render_reasoning_semantic.messages
-      b: render_reasoning_procedural.messages
+      a: render_reasoning_semantic.rendered
+      b: render_reasoning_procedural.rendered
 
-  - id: messages_all
+  - id: rendered_all
     type: Compute
     config: { op: concat }
     inputs:
-      a: messages_sem_proc.value
-      b: render_reasoning_episodic.messages
+      a: rendered_sem_proc.value
+      b: render_reasoning_episodic.rendered
 
-  # --- The reasoning LLM call: takes the rendered messages directly.
-  #     Mirrors plugmem-default's reason_llm_call step. No `config.prompt`
-  #     because we want to use the messages built above verbatim. ---
+  # --- The reasoning LLM call: takes the rendered STRING directly.
+  #     text-mode wraps it as a single user message. Mirrors
+  #     plugmem-default's reason_llm_call step. ---
   - id: reason_llm_call
     type: LLMCall
     config: { role: reasoning }
     inputs:
-      messages: messages_all.value
+      text: rendered_all.value
 
-  # --- Phase exit. reasoning_prompt = the messages /reason would consume.
-  #     variables.text = the LLM's answer (via the LLMCall's parsed dict). ---
+  # --- Phase exit. reasoning_prompt stays empty (we send the string
+  #     directly); variables.text = the LLM's answer (LLMCall's parsed). ---
   - id: out
     type: Output
     inputs:
       mode: get_mode.parsed.mode
-      reasoning_prompt: messages_all.value
+      reasoning_prompt: { const: [] }
       variables: reason_llm_call.parsed
 """
 
@@ -199,11 +208,12 @@ SAMPLES = {
         "label": "plugmem-default retrieve + reasoning",
         "description": (
             "Mirrors PlugMemDefaultPipeline.retrieve + reasoning. "
-            "get_plan + get_mode both run, then one of three reasoning_* "
-            "templates renders by mode, and reason_llm_call consumes the "
-            "rendered messages — so the canvas shows the full "
-            "Template → LLM → Output arc. Memory fetches are stubbed via "
-            "Compute(concat) (StorageRead lands in Phase 6.6)."
+            "Each PromptRender is a `vars → str` function: its `value` "
+            "port is the finished template as a string. The active "
+            "branch's string flows through reason_llm_call (text-mode) "
+            "to produce the answer, which lands in Output.variables. "
+            "Memory fetches are stubbed via Compute(concat) (StorageRead "
+            "lands in Phase 6.6)."
         ),
         "content": PLUGMEM_DEFAULT_RETRIEVE_YAML,
     },
