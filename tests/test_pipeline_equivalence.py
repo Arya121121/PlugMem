@@ -127,6 +127,37 @@ def test_spec_driven_and_default_reasoning_answer_matches(
     assert d["reasoning"] == s["variables"]["text"]
 
 
+def test_spec_driven_reason_endpoint_matches_default_reason(
+    client, fake_llm, monkeypatch, tmp_path,
+):
+    """Phase 6.6b-1: POST /reason on a spec-driven graph runs the saved
+    YAML and reshapes the output to ReasonResponse — used to delegate
+    silently to plugmem-default. Output must be field-by-field equivalent
+    to the default pipeline's /reason response under FakeLLM determinism.
+    """
+    monkeypatch.setenv("PROMPTS_DIR", str(tmp_path))
+    _create_graph(client, "g-equiv-default-4")
+    _create_graph(client, "g-equiv-spec-4")
+    _seed(client, "g-equiv-default-4")
+    _seed(client, "g-equiv-spec-4")
+    _bind_spec_driven_with_sample(client, "g-equiv-spec-4")
+
+    req = {"observation": "How do we deploy?", "goal": "ship", "state": "ok"}
+    d = client.post("/api/v1/graphs/g-equiv-default-4/reason", json=req).json()
+    s = client.post("/api/v1/graphs/g-equiv-spec-4/reason", json=req).json()
+
+    # Field-by-field equivalence on the ReasonResponse shape.
+    assert d["mode"] == s["mode"]
+    assert d["reasoning"] == s["reasoning"], (d["reasoning"], s["reasoning"])
+    # The sample doesn't ship reasoning_prompt (it's an empty list in the
+    # spec-driven path because the LLM was called inside the pipeline).
+    # Default's reasoning_prompt is the input messages. The shapes differ
+    # by design; we don't assert byte-identical here, only that both are
+    # well-formed lists.
+    assert isinstance(d["reasoning_prompt"], list)
+    assert isinstance(s["reasoning_prompt"], list)
+
+
 def test_spec_driven_storage_read_hits_same_chroma_data_as_default(
     client, fake_llm, monkeypatch, tmp_path,
 ):

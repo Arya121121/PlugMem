@@ -36,7 +36,11 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from plugmem.api.schemas import RetrieveRequest, RetrieveResponse
+from plugmem.api.schemas import (
+    ReasonResponse,
+    RetrieveRequest,
+    RetrieveResponse,
+)
 from plugmem.core.memory_graph import MemoryGraph
 from plugmem.core.pipeline_trace import record_llm_step
 from plugmem.pipelines.base import MemoryPipeline
@@ -910,13 +914,27 @@ class PipelineExecutor:
 
 
 class SpecDrivenPipeline(MemoryPipeline):
-    """Interprets a per-graph YAML pipeline at runtime (retrieve only, MVP)."""
+    """Interprets a per-graph YAML pipeline at runtime.
+
+    Currently routes:
+    - ``retrieve``: runs the saved YAML and returns its output as a
+      ``RetrieveResponse``.
+    - ``reason``: runs the **same** retrieve YAML and reshapes the
+      output to ``ReasonResponse`` shape. Works because a well-written
+      retrieve YAML already includes a reasoning ``LLMCall`` at the end
+      (see ``sample_specs.PLUGMEM_DEFAULT_RETRIEVE_YAML``). The LLM's
+      answer (stored in ``variables.text`` by the
+      ``LLMCall.parsed`` convention) becomes ``ReasonResponse.reasoning``.
+    - ``ingest`` / ``consolidate``: delegate to ``PlugMemDefaultPipeline``
+      until Phase 6.6b extends the YAML to those phases.
+    """
 
     name = "spec-driven"
     description = (
-        "Runs a user-authored YAML pipeline for the retrieve phase. Looks for "
-        "{PROMPTS_DIR}/{graph_id}.pipeline.yaml; missing file → 422. Other "
-        "phases (ingest / reason / consolidate) delegate to plugmem-default."
+        "Runs a user-authored YAML pipeline for retrieve + reason. Looks "
+        "for {PROMPTS_DIR}/{graph_id}.pipeline.yaml; missing file → 422. "
+        "Ingest / consolidate delegate to plugmem-default until those "
+        "phases land in the YAML grammar (Phase 6.6b)."
     )
 
     def __init__(self) -> None:
@@ -924,24 +942,52 @@ class SpecDrivenPipeline(MemoryPipeline):
 
     # ---- retrieve runs the executor ----
     def retrieve(self, graph: MemoryGraph, body: RetrieveRequest) -> RetrieveResponse:
-        spec = self._load_for_graph(graph.graph_id)
-        executor = PipelineExecutor(spec, graph)
-        out = executor.run(self._body_to_inputs(body))
+        out = self._run_for_graph(graph, self._body_to_inputs(body))
         return RetrieveResponse(
             mode=out.get("mode") or "semantic_memory",
             reasoning_prompt=out.get("reasoning_prompt") or [],
             variables=out.get("variables") or {},
         )
 
+    # ---- reason reuses the retrieve YAML, reshapes the output ----
+    def reason(self, graph: MemoryGraph, body) -> ReasonResponse:
+        retrieve_body = RetrieveRequest(
+            observation=body.observation or "",
+            goal=body.goal, subgoal=body.subgoal, state=body.state,
+            task_type=body.task_type, time=body.time, mode=body.mode,
+            session_id=getattr(body, "session_id", None),
+        )
+        out = self._run_for_graph(graph, self._body_to_inputs(retrieve_body))
+        # `variables` is whatever the YAML's Output node assigned. The
+        # convention from the shipped sample is that the reasoning
+        # LLMCall's `parsed` dict ({"text": response}) lands there.
+        variables = out.get("variables") or {}
+        reasoning = ""
+        if isinstance(variables, dict):
+            reasoning = (
+                variables.get("text")
+                or variables.get("reasoning")
+                or ""
+            )
+        return ReasonResponse(
+            mode=out.get("mode") or "semantic_memory",
+            reasoning=reasoning,
+            reasoning_prompt=out.get("reasoning_prompt") or [],
+        )
+
     # ---- other phases delegate ----
     def ingest(self, graph, body):
         return self._default.ingest(graph, body)
 
-    def reason(self, graph, body):
-        return self._default.reason(graph, body)
-
     def consolidate(self, graph, body):
         return self._default.consolidate(graph, body)
+
+    # ---- shared execution path ----
+    def _run_for_graph(
+        self, graph: MemoryGraph, phase_inputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        spec = self._load_for_graph(graph.graph_id)
+        return PipelineExecutor(spec, graph).run(phase_inputs)
 
     # ---- helpers ----
     @staticmethod
