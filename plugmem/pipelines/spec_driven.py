@@ -48,8 +48,9 @@ MAX_LOOP_ITERATIONS = 1000
 
 NODE_TYPES = {
     "Input", "Output", "LLMCall", "PromptRender", "Constant",
-    "ForEach", "Branch", "Compute",
+    "ForEach", "Branch", "Compute", "StorageRead", "Embed",
 }
+STORAGE_COLLECTIONS = {"semantic", "procedural", "episodic"}
 BODY_FORBIDDEN_TYPES = {"Input", "Output"}
 
 
@@ -273,6 +274,40 @@ def _parse_node(entry: Any, *, context: str) -> NodeSpec:
                 f"{sorted(required)}, missing {sorted(missing)}"
             )
 
+    elif ntype == "StorageRead":
+        coll = cfg.get("collection")
+        if coll not in STORAGE_COLLECTIONS:
+            raise ValueError(
+                f"{context}: StorageRead {nid!r}: config.collection must be "
+                f"one of {sorted(STORAGE_COLLECTIONS)}, got {coll!r}"
+            )
+        # Per-collection input shape — same as retrieve_memory's call sites.
+        required_inputs = {
+            "semantic": {"query", "tags"},
+            "procedural": {"subgoal"},
+            "episodic": {"query"},
+        }[coll]
+        provided = set(ins.keys())
+        missing = required_inputs - provided
+        if missing:
+            raise ValueError(
+                f"{context}: StorageRead {nid!r} collection={coll!r}: "
+                f"requires inputs {sorted(required_inputs)}, missing "
+                f"{sorted(missing)}"
+            )
+        top_k = cfg.get("top_k", 5)
+        if not isinstance(top_k, int) or top_k <= 0:
+            raise ValueError(
+                f"{context}: StorageRead {nid!r}: config.top_k must be a "
+                f"positive integer, got {top_k!r}"
+            )
+
+    elif ntype == "Embed":
+        if "text" not in ins:
+            raise ValueError(
+                f"{context}: Embed {nid!r}: inputs.text is required"
+            )
+
     return NodeSpec(id=nid, type=ntype, config=cfg, inputs=ins, body=body)
 
 
@@ -338,20 +373,26 @@ def _validate_refs(
             if not isinstance(ref, str) or not ref:
                 raise ValueError(
                     f"{context}: node {n.id!r} input {port!r}: bad reference {ref!r} "
-                    f"(expected 'node_id.port', a bare item_var, or {{const: value}})"
+                    f"(expected 'node_id.port', a bare item_var/node, or {{const: value}})"
                 )
             head = ref.split(".", 1)[0]
             has_dot = "." in ref
+            # Order: item_var → known node id → unknown.
+            # Bare refs to known nodes are allowed and mean "the node's
+            # whole output dict" (useful for piping into Output.variables
+            # or any consumer that wants the full record).
             if head in item_vars:
-                # Bare or dotted item-var ref is OK.
                 continue
+            if head in allowed_ids:
+                continue
+            # Head is unknown. Surface the more helpful error message
+            # depending on whether a dot was present.
             if not has_dot:
                 raise ValueError(
                     f"{context}: node {n.id!r} input {port!r}: bare reference "
-                    f"{ref!r} must be a known item_var (got: {sorted(item_vars)})"
+                    f"{ref!r} must be a known item_var or top-level node id "
+                    f"(item_vars: {sorted(item_vars)})"
                 )
-            if head in allowed_ids:
-                continue
             raise ValueError(
                 f"{context}: node {n.id!r} input {port!r}: references unknown "
                 f"node {head!r}"
@@ -554,6 +595,10 @@ class PipelineExecutor:
             return self._run_branch(node, resolved, env, item_bindings=item_bindings)
         if node.type == "Compute":
             return self._run_compute(node, resolved)
+        if node.type == "StorageRead":
+            return self._run_storage_read(node, resolved)
+        if node.type == "Embed":
+            return self._run_embed(node, resolved)
         raise ValueError(f"Unknown node type {node.type!r}")
 
     def _resolve_inputs(
@@ -670,6 +715,85 @@ class PipelineExecutor:
             raise ValueError(
                 f"Compute {node.id!r} op={op_name!r}: {type(e).__name__}: {e}"
             ) from e
+
+    # ----- StorageRead -----
+
+    def _run_storage_read(
+        self, node: NodeSpec, resolved_inputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Read memory nodes from the bound MemoryGraph, formatted for prompts.
+
+        Wraps ``MemoryGraph.retrieve_{semantic,procedural,episodic}_nodes``
+        using the graph's default value functions (``tag_relevant``,
+        ``semantic_relevant``, ``subgoal_relevant``, ``procedural_relevant``).
+        Returns the same formatted strings that ``MemoryGraph.retrieve_memory``
+        builds for the reasoning templates plus the list of selected ids
+        (useful for the trace recorder).
+        """
+        collection = node.config["collection"]
+        graph = self.memory_graph
+
+        if collection == "semantic":
+            query = resolved_inputs.get("query") or ""
+            tags = resolved_inputs.get("tags") or []
+            if not isinstance(tags, list):
+                raise ValueError(
+                    f"StorageRead {node.id!r}: inputs.tags must be a list, "
+                    f"got {type(tags).__name__}"
+                )
+            nodes = graph.retrieve_semantic_nodes(
+                semantic_memory={"semantic_memory": query, "tags": list(tags)},
+                value_func_tag=graph.tag_relevant,
+                value_func=graph.semantic_relevant,
+            )
+            if not nodes:
+                return {"value": "No relevant fact", "ids": []}
+            text = "".join(
+                f"Fact {i}: {n.get_semantic_memory()}\n"
+                for i, n in enumerate(nodes)
+            )
+            return {"value": text, "ids": [n.semantic_id for n in nodes]}
+
+        if collection == "procedural":
+            subgoal = resolved_inputs.get("subgoal") or ""
+            nodes = graph.retrieve_procedural_nodes(
+                subgoal=subgoal,
+                value_func_subgoal=graph.subgoal_relevant,
+                value_func=graph.procedural_relevant,
+            )
+            if not nodes:
+                return {"value": "No relevant experiences", "ids": []}
+            text = "".join(
+                f"Experience {i}: {n.get_procedural_memory()}\n"
+                for i, n in enumerate(nodes)
+            )
+            return {"value": text, "ids": [n.procedural_id for n in nodes]}
+
+        if collection == "episodic":
+            query = resolved_inputs.get("query") or ""
+            text = graph.retrieve_episodic_nodes(observation=query) or ""
+            return {"value": text, "ids": []}
+
+        # Unreachable — load-time check rejects unknown collections.
+        raise ValueError(
+            f"StorageRead {node.id!r}: unknown collection {collection!r}"
+        )
+
+    # ----- Embed -----
+
+    def _run_embed(
+        self, node: NodeSpec, resolved_inputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        text = resolved_inputs.get("text", "")
+        if not isinstance(text, str):
+            raise ValueError(
+                f"Embed {node.id!r}: inputs.text must be a string, "
+                f"got {type(text).__name__}"
+            )
+        emb = self.memory_graph.embedder.embed(text)
+        # Normalize to a Python list so concat/length ops behave predictably.
+        vec = emb.tolist() if hasattr(emb, "tolist") else list(emb)
+        return {"embedding": vec}
 
     # ----- trace step name (suffixed by iter indices when inside a loop) -----
 

@@ -1194,3 +1194,156 @@ def test_llmcall_text_mode_rejects_non_string(graph_manager, tmp_path):
     mg = graph_manager.get_graph("g-nostring")
     with pytest.raises(ValueError, match="inputs.text must be a string"):
         PipelineExecutor(graph, mg).run({"observation": "?"})
+
+
+# ----------------------------------------------------------------------- #
+# StorageRead + Embed (Phase 6.6a)
+# ----------------------------------------------------------------------- #
+
+
+def test_storage_read_loader_rejects_unknown_collection(tmp_path):
+    """StorageRead.config.collection must be one of the three known stores."""
+    from plugmem.pipelines.spec_driven import load_yaml_str
+    bad = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: r
+            type: StorageRead
+            config: { collection: tags }
+            inputs: { query: in.observation, tags: { const: [] } }
+          - id: out
+            type: Output
+            inputs: { mode: { const: m }, reasoning_prompt: { const: [] }, variables: { const: {} } }
+    """)
+    with pytest.raises(ValueError, match="collection must be one of"):
+        load_yaml_str(bad)
+
+
+def test_storage_read_loader_rejects_missing_inputs(tmp_path):
+    """StorageRead.collection=semantic requires both query AND tags."""
+    from plugmem.pipelines.spec_driven import load_yaml_str
+    bad = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: r
+            type: StorageRead
+            config: { collection: semantic }
+            inputs: { query: in.observation }
+          - id: out
+            type: Output
+            inputs: { mode: { const: m }, reasoning_prompt: { const: [] }, variables: { const: {} } }
+    """)
+    with pytest.raises(ValueError, match="missing .*tags"):
+        load_yaml_str(bad)
+
+
+def test_storage_read_semantic_returns_facts_when_seeded(graph_manager, fake_embedder, tmp_path):
+    """StorageRead on a graph with semantic nodes returns formatted 'Fact i: ...' text."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+    from plugmem.core.graph_node import SemanticNode
+
+    graph_manager.create_graph("g-storage-sem")
+    mg = graph_manager.get_graph("g-storage-sem")
+    # Seed two semantic nodes with deterministic embeddings.
+    for i, text in enumerate(["FastAPI deploys via Docker.", "Auth uses JWT."]):
+        node = SemanticNode(
+            semantic_id=i, semantic_memory_str=text,
+            embedding=fake_embedder.embed(text),
+        )
+        mg.semantic_nodes.append(node)
+        mg.semantic_id2node[i] = node
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: fetch
+            type: StorageRead
+            config: { collection: semantic }
+            inputs:
+              query: in.observation
+              tags: { const: [] }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: fetch
+    """)
+    graph = load_yaml_str(yaml_text)
+    out = PipelineExecutor(graph, mg).run({"observation": "How do we deploy?"})
+    text = out["variables"]["value"]
+    assert "Fact 0:" in text or "Fact 1:" in text
+    assert isinstance(out["variables"]["ids"], list)
+
+
+def test_storage_read_semantic_returns_no_relevant_when_empty(graph_manager, tmp_path):
+    """Empty graph → 'No relevant fact'."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+    graph_manager.create_graph("g-storage-empty")
+    mg = graph_manager.get_graph("g-storage-empty")
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: fetch
+            type: StorageRead
+            config: { collection: semantic }
+            inputs:
+              query: in.observation
+              tags: { const: [] }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: fetch
+    """)
+    graph = load_yaml_str(yaml_text)
+    out = PipelineExecutor(graph, mg).run({"observation": "anything"})
+    assert out["variables"]["value"] == "No relevant fact"
+
+
+def test_embed_returns_vector(graph_manager, fake_embedder):
+    """Embed wraps graph.embedder.embed(text); output is a list[float]."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+    graph_manager.create_graph("g-embed")
+    mg = graph_manager.get_graph("g-embed")
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: e
+            type: Embed
+            inputs: { text: in.observation }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: e
+    """)
+    graph = load_yaml_str(yaml_text)
+    out = PipelineExecutor(graph, mg).run({"observation": "hello"})
+    emb = out["variables"]["embedding"]
+    assert isinstance(emb, list) and len(emb) == fake_embedder.DIM
+    assert all(isinstance(x, float) for x in emb)
+
+
+def test_embed_loader_rejects_missing_text(tmp_path):
+    from plugmem.pipelines.spec_driven import load_yaml_str
+    bad = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: e
+            type: Embed
+            inputs: {}
+          - id: out
+            type: Output
+            inputs: { mode: { const: m }, reasoning_prompt: { const: [] }, variables: { const: {} } }
+    """)
+    with pytest.raises(ValueError, match="inputs.text is required"):
+        load_yaml_str(bad)

@@ -140,6 +140,8 @@ _TYPE_TO_KIND = {
     "Compute": "compute",
     "ForEach": "loop_marker",
     "Branch": "branch",
+    "StorageRead": "storage",
+    "Embed": "embed",
 }
 
 
@@ -458,6 +460,11 @@ def _label_for(n: NodeSpec, *, parent_id: Optional[str] = None) -> str:
         return "Input"
     if n.type == "Output":
         return "Output"
+    if n.type == "StorageRead":
+        coll = n.config.get("collection", "?")
+        return f"StorageRead · {coll}"
+    if n.type == "Embed":
+        return f"Embed · {qualified_id}"
     return n.type
 
 
@@ -488,6 +495,14 @@ def _desc_for(n: NodeSpec) -> str:
             "Runs body if condition is truthy; otherwise emits else_value "
             "for each declared output."
         )
+    if n.type == "StorageRead":
+        coll = n.config.get("collection")
+        return (
+            f"Reads from the graph's {coll!r} collection using the "
+            f"default value functions; returns a formatted string + ids list."
+        )
+    if n.type == "Embed":
+        return "Calls graph.embedder.embed(text); returns the embedding vector."
     return n.type
 
 
@@ -509,4 +524,8 @@ def _outputs_for(n: NodeSpec) -> List[str]:
     if n.type in ("ForEach", "Branch"):
         decls = (n.config or {}).get("outputs") or {}
         return list(decls.keys())
+    if n.type == "StorageRead":
+        return ["value", "ids"]
+    if n.type == "Embed":
+        return ["embedding"]
     return []

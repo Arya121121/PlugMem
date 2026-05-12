@@ -8,57 +8,35 @@ from __future__ import annotations
 
 
 # ----------------------------------------------------------------------- #
-# plugmem-default — retrieve+reason flow, expressed in spec-driven YAML
+# plugmem-default — full retrieve+reason flow in spec-driven YAML
 # ----------------------------------------------------------------------- #
 #
-# Top-level node IDs intentionally mirror ``plugmem.core.pipeline_spec``:
+# This sample is intended to be **functionally equivalent** to
+# ``PlugMemDefaultPipeline.retrieve`` (which calls
+# ``MemoryGraph.retrieve_memory`` and ``reasoning_llm.complete``).
+# Top-level IDs mirror ``plugmem.core.pipeline_spec.STEPS`` so the
+# canvas reads as a near-1-to-1 of plugmem-default's retrieve phase.
 #
-#   get_plan                           (LLMCall, prompt-mode)
-#   get_mode                           (LLMCall, prompt-mode)
-#   retrieve_semantic_nodes            (Compute placeholder)
-#   retrieve_procedural_nodes          (Compute placeholder)
-#   retrieve_episodic_nodes            (Compute placeholder)
-#   render_reasoning_semantic          (Branch wrapping PromptRender)
-#   render_reasoning_procedural        (Branch wrapping PromptRender)
-#   render_reasoning_episodic          (Branch wrapping PromptRender)
-#   reason_llm_call                    (LLMCall, text-mode)
-#
-# Each ``render_reasoning_*`` body is a ``PromptRender`` node. Its
-# ``value`` output is the **finished template as a single string** —
-# variables substituted in, ready to send to an LLM. The branches
-# collapse those strings into one via two ``Compute(concat)`` nodes
-# (concat over strings = string concatenation; inactive branches emit
-# the empty string, so only the active branch contributes).
-#
-# ``reason_llm_call`` uses LLMCall's text-mode: ``inputs.text`` is the
-# finished rendered string, which the executor wraps as a single user
-# message before calling the LLM. The result flows into the Output's
-# ``variables``.
-#
-# The MVP grammar has no StorageRead / Embed node; the
-# ``retrieve_*_nodes`` steps are Compute(concat) stubs whose inputs
-# surface what data WOULD be fetched in production. Real fetches land
-# in Phase 6.6.
+# The pipeline:
+#   1. get_plan (LLM, prompt-mode) — produces next_subgoal + query_tags
+#   2. get_mode (LLM, prompt-mode) — picks the mode
+#   3. Memory fetch by mode (real StorageRead now, no more stubs):
+#        - semantic_memory  → retrieve_semantic_nodes (semantic store)
+#        - procedural_memory → retrieve_procedural_nodes (procedural store)
+#        - episodic_memory   → retrieve_episodic_nodes (episodic context)
+#      Each fetch is gated by a Branch on the mode flag.
+#   4. ONE reasoning template renders to a STRING, gated by mode.
+#   5. reason_llm_call (LLM, text-mode) consumes the rendered string.
+#   6. Output ships {mode, reasoning_prompt: [], variables: <LLM parsed>}.
 PLUGMEM_DEFAULT_RETRIEVE_YAML = """\
-# plugmem-default retrieve + reasoning, expressed as a spec-driven pipeline.
-#
-# Flow:
-#   get_plan + get_mode (both always run, parallel by data deps)
-#     → retrieve_*_nodes (stubs — would hit storage in production)
-#     → ONE of three reasoning_* templates renders to a STRING, gated by mode
-#     → reason_llm_call (text-mode) wraps that string as a user message
-#     → Output ships {mode, reasoning_prompt: <empty>, variables: <answer>}
-#
-# Each Template node is a `vars → str` function: the `value` port is
-# the finished template with all fields filled in. Empty branches emit
-# the empty string, so the final concat collapses to the single string
-# that the active branch produced.
+# Functionally equivalent to PlugMemDefaultPipeline.retrieve.
+# Top-level IDs match plugmem.core.pipeline_spec for the retrieve phase.
 phase: retrieve
 
 nodes:
   - { id: in, type: Input }
 
-  # --- Planning + mode classification (both always run) ---
+  # 1. Plan + mode classification (both always run).
   - id: get_plan
     type: LLMCall
     config: { prompt: get_plan, role: retrieval }
@@ -75,29 +53,7 @@ nodes:
       observation: in.observation
       task_type: in.task_type
 
-  # --- Memory fetch — STUBBED via Compute(concat) ---
-  - id: retrieve_semantic_nodes
-    type: Compute
-    config: { op: concat }
-    inputs:
-      a: { const: "Fact 0 (stub — would be retrieved via plan.parsed.query_tags + " }
-      b: in.observation
-
-  - id: retrieve_procedural_nodes
-    type: Compute
-    config: { op: concat }
-    inputs:
-      a: { const: "Experience 0 (stub — would be retrieved via plan.parsed.next_subgoal=" }
-      b: get_plan.parsed.next_subgoal
-
-  - id: retrieve_episodic_nodes
-    type: Compute
-    config: { op: concat }
-    inputs:
-      a: { const: "Episode 0 (stub — would be retrieved via observation=" }
-      b: in.observation
-
-  # --- Mode gates: each Compute(eq) feeds a Branch's condition. ---
+  # 2. Mode flags — feed Branch conditions for fetch + render.
   - id: is_semantic
     type: Compute
     config: { op: eq }
@@ -119,9 +75,52 @@ nodes:
       a: get_mode.parsed.mode
       b: { const: episodic_memory }
 
-  # --- Template rendering, one per mode.
-  #     Body emits ``render.value`` (a STRING — the finished template).
-  #     Inactive branches emit the empty string. ---
+  # 3. Memory fetch — REAL StorageRead now (no placeholder stubs).
+  #    Each gated by its mode flag; inactive ones emit "" (the
+  #    matching reasoning template also emits "" so the chain stays
+  #    consistent).
+  - id: retrieve_semantic_nodes
+    type: Branch
+    inputs: { condition: is_semantic.value }
+    config:
+      outputs: { value: read.value }
+      else_value: { const: "" }
+    body:
+      - id: read
+        type: StorageRead
+        config: { collection: semantic }
+        inputs:
+          query: in.observation
+          tags: get_plan.parsed.query_tags
+
+  - id: retrieve_procedural_nodes
+    type: Branch
+    inputs: { condition: is_procedural.value }
+    config:
+      outputs: { value: read.value }
+      else_value: { const: "" }
+    body:
+      - id: read
+        type: StorageRead
+        config: { collection: procedural }
+        inputs:
+          subgoal: get_plan.parsed.next_subgoal
+
+  - id: retrieve_episodic_nodes
+    type: Branch
+    inputs: { condition: is_episodic.value }
+    config:
+      outputs: { value: read.value }
+      else_value: { const: "" }
+    body:
+      - id: read
+        type: StorageRead
+        config: { collection: episodic }
+        inputs:
+          query: in.observation
+
+  # 4. Template rendering, one per mode. Each body emits ``render.value``
+  #    (the finished prompt string). Inactive branches emit "".
   - id: render_reasoning_semantic
     type: Branch
     inputs: { condition: is_semantic.value }
@@ -166,9 +165,8 @@ nodes:
           time: in.time
           question: in.observation
 
-  # --- Collapse the three optional renders into one string.
-  #     Compute(concat) on strings is string concatenation; two of the
-  #     three branches contributed the empty string. ---
+  # 5. Collapse three optional renders into one string. concat over
+  #    strings = string concatenation; inactive branches contribute "".
   - id: rendered_sem_proc
     type: Compute
     config: { op: concat }
@@ -183,17 +181,14 @@ nodes:
       a: rendered_sem_proc.value
       b: render_reasoning_episodic.rendered
 
-  # --- The reasoning LLM call: takes the rendered STRING directly.
-  #     text-mode wraps it as a single user message. Mirrors
-  #     plugmem-default's reason_llm_call step. ---
+  # 6. Reasoning LLM call (text-mode wraps the string as a user message).
   - id: reason_llm_call
     type: LLMCall
     config: { role: reasoning }
     inputs:
       text: rendered_all.value
 
-  # --- Phase exit. reasoning_prompt stays empty (we send the string
-  #     directly); variables.text = the LLM's answer (LLMCall's parsed). ---
+  # 7. Phase exit. variables.text = the LLM's answer (LLMCall.parsed).
   - id: out
     type: Output
     inputs:
@@ -207,13 +202,12 @@ SAMPLES = {
     "plugmem-default": {
         "label": "plugmem-default retrieve + reasoning",
         "description": (
-            "Mirrors PlugMemDefaultPipeline.retrieve + reasoning. "
-            "Each PromptRender is a `vars → str` function: its `value` "
-            "port is the finished template as a string. The active "
-            "branch's string flows through reason_llm_call (text-mode) "
-            "to produce the answer, which lands in Output.variables. "
-            "Memory fetches are stubbed via Compute(concat) (StorageRead "
-            "lands in Phase 6.6)."
+            "Functionally equivalent to PlugMemDefaultPipeline.retrieve. "
+            "Uses real StorageRead nodes (Phase 6.6) to fetch from the "
+            "graph's semantic/procedural/episodic collections — no more "
+            "placeholder stubs. Each fetch + reasoning template is gated "
+            "by a Branch on the mode flag; the reasoning LLM call uses "
+            "text-mode on the rendered prompt string."
         ),
         "content": PLUGMEM_DEFAULT_RETRIEVE_YAML,
     },

@@ -25,9 +25,11 @@ algorithm itself with a custom pipeline.
 | 6.4 | Branch + Compute nodes in spec-driven pipelines | shipped |
 | 6.5a | Non-destructive YAML versioning + YAML editor UI + version history | shipped |
 | 6.5d | Formal grammar spec doc + JSON Schema | shipped |
+| 6.6a | StorageRead + Embed nodes + sample drops placeholder stubs | shipped |
+| 6.6a-diff | Differential harness: spec-driven sample ≡ plugmem-default | shipped |
 | 6.5b | Interactive xyflow canvas (drag-and-drop palette, port wiring) | future |
 | 6.5c | Python hot-reload for forked pipeline modules | future |
-| 6.6 | Spec-driven coverage of close / insert / consolidate phases | future |
+| 6.6b | Spec-driven coverage of close / insert / consolidate phases | future |
 
 ## Cross-cutting principles
 

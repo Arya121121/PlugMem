@@ -29,6 +29,8 @@ Node       = InputNode
            | ComputeNode
            | ForEachNode
            | BranchNode
+           | StorageReadNode
+           | EmbedNode
 
 Common     = id: <NodeId>          (required, non-empty string, unique in scope)
              type: <NodeType>      (required, one of the variants above)
@@ -252,6 +254,51 @@ declared outputs surface; falsy → every declared output receives
 
 **Outputs:** the keys named in `config.outputs`.
 
+### 2.9 `StorageRead`
+
+Reads memory from the bound graph's ChromaDB collections using the
+graph's default value functions. Returns a formatted string + the list
+of selected node ids (suitable for `record_llm_step` traces).
+
+| Field | Required | Schema |
+|-------|----------|--------|
+| `config.collection` | **yes** | one of `semantic`, `procedural`, `episodic` |
+| `config.top_k` | no | positive int (default 5) |
+| `inputs.query` | semantic / episodic | string |
+| `inputs.tags` | semantic | `list[str]` |
+| `inputs.subgoal` | procedural | string |
+
+**Outputs:**
+
+| Port | Type | Meaning |
+|------|------|---------|
+| `value` | `str` | Formatted memory block: `"Fact i: ..."` (semantic), `"Experience i: ..."` (procedural), or episodic context. Returns `"No relevant fact"` / `"No relevant experiences"` / `""` when empty. |
+| `ids` | `list[int]` | Selected node ids (`semantic_id` / `procedural_id`; `[]` for episodic). |
+
+Internally calls
+`MemoryGraph.retrieve_semantic_nodes` /
+`retrieve_procedural_nodes` /
+`retrieve_episodic_nodes` with the graph's default value functions
+(`tag_relevant`, `semantic_relevant`, `subgoal_relevant`,
+`procedural_relevant`). Matches what `PlugMemDefaultPipeline.retrieve`
+calls under the hood.
+
+### 2.10 `Embed`
+
+Wraps the graph's embedding client. Useful when you need an embedding
+for similarity outside of a `StorageRead` (e.g., for a custom
+`Compute(similarity)` op once that lands).
+
+| Field | Required | Schema |
+|-------|----------|--------|
+| `inputs.text` | **yes** | string |
+
+**Outputs:**
+
+| Port | Type | Meaning |
+|------|------|---------|
+| `embedding` | `list[float]` | Vector returned by `graph.embedder.embed(text)` (normalized to a Python list). |
+
 ---
 
 ## 3. Body subgraph rules
@@ -293,8 +340,7 @@ Both raise `ValueError` (mapped to HTTP 422 by the route).
 
 | Item | Phase |
 |------|-------|
-| `StorageRead` / `Embed` node types | 6.6 |
-| `close` / `insert` / `consolidate` phases | 6.6 |
+| `close` / `insert` / `consolidate` phases | 6.6b |
 | `Switch` (n-way branch) | TBD — gauge with use case |
 | `filter_by`, `top_k`, `similarity` ops | TBD |
 | Per-prompt parser plugins | TBD |

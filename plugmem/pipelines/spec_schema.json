@@ -55,7 +55,9 @@
         { "$ref": "#/$defs/ConstantNode" },
         { "$ref": "#/$defs/ComputeNode" },
         { "$ref": "#/$defs/ForEachNode" },
-        { "$ref": "#/$defs/BranchNode" }
+        { "$ref": "#/$defs/BranchNode" },
+        { "$ref": "#/$defs/StorageReadNode" },
+        { "$ref": "#/$defs/EmbedNode" }
       ]
     },
     "InputNode": {
@@ -190,6 +192,43 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/$defs/Node" }
+        }
+      }
+    },
+    "StorageReadNode": {
+      "type": "object",
+      "required": ["id", "type", "config", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "StorageRead" },
+        "config": {
+          "type": "object",
+          "required": ["collection"],
+          "additionalProperties": false,
+          "properties": {
+            "collection": {
+              "type": "string",
+              "enum": ["semantic", "procedural", "episodic"]
+            },
+            "top_k": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "inputs": { "$ref": "#/$defs/PortMap" }
+      }
+    },
+    "EmbedNode": {
+      "type": "object",
+      "required": ["id", "type", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "Embed" },
+        "config": { "type": "object", "maxProperties": 0 },
+        "inputs": {
+          "type": "object",
+          "required": ["text"],
+          "additionalProperties": { "$ref": "#/$defs/Ref" }
         }
       }
     },
