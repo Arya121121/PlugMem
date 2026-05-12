@@ -21,8 +21,8 @@ algorithm itself with a custom pipeline.
 | 6.0 | Spec ↔ code drift checks (static AST lint + runtime trace check) | shipped |
 | 6.1 | Direction A — code→spec snapshot tool with `--check` for CI | shipped |
 | 6.2 | Direction B — `SpecDrivenPipeline` MVP: retrieve-only, YAML-driven | shipped |
-| **6.3** | **Loops in spec-driven pipelines (`ForEach` node)** | **in progress** |
-| 6.4 | Branch + Compute nodes in spec-driven pipelines | future |
+| 6.3 | Loops in spec-driven pipelines (`ForEach` node) | shipped |
+| 6.4 | Branch + Compute nodes in spec-driven pipelines | shipped |
 | 6.5 | Visual editor (xyflow) + non-destructive edits + Python hot-reload | future |
 | 6.6 | Spec-driven coverage of close / insert / consolidate phases | future |
 

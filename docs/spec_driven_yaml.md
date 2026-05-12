@@ -218,6 +218,94 @@ distinct step in the Pipeline tab's traces panel. Nested loops chain:
 - The global `LLM_CALL_CAP` (20 per pipeline run) still applies — a loop
   that fans out an LLM call hits it sooner than a pure-compute loop.
 
+### `Compute`
+
+A single-op function. Lets the spec produce booleans (for `Branch`
+conditions), compare values, and do basic list / string operations
+without escaping into Python.
+
+```yaml
+- id: above_threshold
+  type: Compute
+  config: { op: gt }
+  inputs:
+    a: score.parsed.value
+    b: { const: 0.5 }
+# → above_threshold.value is bool
+```
+
+Every op produces a single output port named `value`. Unknown ops are
+rejected at load time.
+
+**Op table** (MVP whitelist):
+
+| Op | Inputs | Output | Notes |
+|---|---|---|---|
+| `eq` | `a`, `b` | bool | `a == b` |
+| `ne` | `a`, `b` | bool | `a != b` |
+| `lt` | `a`, `b` | bool | `a < b` |
+| `gt` | `a`, `b` | bool | `a > b` |
+| `lte` | `a`, `b` | bool | `a <= b` |
+| `gte` | `a`, `b` | bool | `a >= b` |
+| `and` | `a`, `b` | bool | truthiness of both |
+| `or` | `a`, `b` | bool | truthiness of either |
+| `not` | `a` | bool | negates truthiness |
+| `length` | `list` | int | `len(list)` |
+| `contains` | `list`, `item` | bool | `item in list` |
+| `concat` | `a`, `b` | str or list | `a + b` (strings or lists) |
+
+Out of scope for this MVP: `filter_by`, `top_k`, `similarity` — they
+need predicate sub-specs or embedder access. Open a request if needed.
+
+### `Branch`
+
+Conditionally run a body subgraph. Truthy → execute the body and surface
+its declared outputs. Falsy → skip the body and emit `else_value` for
+every declared output.
+
+```yaml
+- id: maybe_merge
+  type: Branch
+  inputs:
+    condition: above_threshold.value      # any value; coerced via bool(x)
+  config:
+    outputs:
+      result: merge.parsed.merged_statement   # ref → body node port
+    else_value: { const: null }               # what each output is when false
+  body:
+    - id: merge
+      type: LLMCall
+      config: { prompt: get_new_semantic, role: consolidation }
+      inputs: { memory_earlier: in.left, memory_later: in.right }
+```
+
+**Inputs:**
+
+| Port | Type | Meaning |
+|---|---|---|
+| `condition` | any | Coerced to bool via Python `bool(x)`. |
+
+**Config:**
+
+| Key | Type | Meaning |
+|---|---|---|
+| `outputs` | dict | `{<output_name>: "<body_node>.<port>"}`. When the condition is truthy, each declared port is sourced from the body's env. Required and non-empty. |
+| `else_value` | ref | Optional. When the condition is falsy, every declared output gets this value. Defaults to `{const: null}`. Accepts a ref string or a `{const: ...}` literal. |
+
+**Body semantics:**
+
+- Same scoping rules as `ForEach.body`: body nodes may reference outer
+  scope; cannot contain `Input` / `Output`; cycles rejected at load.
+- LLM calls inside the body run only when the condition is truthy — so
+  a `Branch` with a falsy condition is a cheap no-op (no LLM, no
+  embedder calls).
+- `Branch` and `ForEach` can nest inside each other freely.
+
+**Single-body design:** the MVP supports only a body that runs when
+truthy. To express full if/else, chain two `Branch` nodes with inverted
+conditions (use `Compute` with `op: not`), or use `else_value` to
+encode the alternative path's result.
+
 ## Tracing
 
 Every `LLMCall` executes inside the existing `PipelineTraceRecorder`

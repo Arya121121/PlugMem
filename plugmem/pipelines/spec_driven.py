@@ -46,8 +46,46 @@ from plugmem.prompts.registry import PromptRegistry
 LLM_CALL_CAP = 20
 MAX_LOOP_ITERATIONS = 1000
 
-NODE_TYPES = {"Input", "Output", "LLMCall", "PromptRender", "Constant", "ForEach"}
+NODE_TYPES = {
+    "Input", "Output", "LLMCall", "PromptRender", "Constant",
+    "ForEach", "Branch", "Compute",
+}
 BODY_FORBIDDEN_TYPES = {"Input", "Output"}
+
+
+# ----------------------------------------------------------------------- #
+# Compute ops (whitelist)
+# ----------------------------------------------------------------------- #
+
+
+def _op_eq(i):       return {"value": i["a"] == i["b"]}
+def _op_ne(i):       return {"value": i["a"] != i["b"]}
+def _op_lt(i):       return {"value": i["a"] <  i["b"]}
+def _op_gt(i):       return {"value": i["a"] >  i["b"]}
+def _op_lte(i):      return {"value": i["a"] <= i["b"]}
+def _op_gte(i):      return {"value": i["a"] >= i["b"]}
+def _op_and(i):      return {"value": bool(i["a"]) and bool(i["b"])}
+def _op_or(i):       return {"value": bool(i["a"]) or  bool(i["b"])}
+def _op_not(i):      return {"value": not bool(i["a"])}
+def _op_length(i):   return {"value": len(i["list"])}
+def _op_contains(i): return {"value": i["item"] in i["list"]}
+def _op_concat(i):   return {"value": i["a"] + i["b"]}
+
+
+COMPUTE_OPS: Dict[str, Dict[str, Any]] = {
+    "eq":       {"fn": _op_eq,       "inputs": ["a", "b"]},
+    "ne":       {"fn": _op_ne,       "inputs": ["a", "b"]},
+    "lt":       {"fn": _op_lt,       "inputs": ["a", "b"]},
+    "gt":       {"fn": _op_gt,       "inputs": ["a", "b"]},
+    "lte":      {"fn": _op_lte,      "inputs": ["a", "b"]},
+    "gte":      {"fn": _op_gte,      "inputs": ["a", "b"]},
+    "and":      {"fn": _op_and,      "inputs": ["a", "b"]},
+    "or":       {"fn": _op_or,       "inputs": ["a", "b"]},
+    "not":      {"fn": _op_not,      "inputs": ["a"]},
+    "length":   {"fn": _op_length,   "inputs": ["list"]},
+    "contains": {"fn": _op_contains, "inputs": ["list", "item"]},
+    "concat":   {"fn": _op_concat,   "inputs": ["a", "b"]},
+}
 
 
 # ----------------------------------------------------------------------- #
@@ -155,12 +193,12 @@ def load_yaml(path: Path) -> PipelineGraph:
     _validate_refs(nodes, allowed_ids=seen, item_vars=set(), context="top-level")
     _topo_sort(nodes)
 
-    # Recurse into ForEach bodies: validate their refs against the
-    # union of outer ids + body ids + item_var, and ensure body topo
-    # sorts (no cycles within the body).
+    # Recurse into ForEach / Branch bodies to validate refs + cycles.
     for n in nodes:
         if n.type == "ForEach":
             _validate_foreach(n, outer_ids=seen)
+        elif n.type == "Branch":
+            _validate_branch(n, outer_ids=seen)
 
     return PipelineGraph(phase=phase, nodes=nodes)
 
@@ -193,35 +231,84 @@ def _parse_node(entry: Any, *, context: str) -> NodeSpec:
         item_var = cfg.get("item_var")
         if not isinstance(item_var, str) or not item_var:
             raise ValueError(f"{context}: ForEach {nid!r}: config.item_var must be a non-empty string")
-        out_decls = cfg.get("outputs") or {}
-        if not isinstance(out_decls, dict):
-            raise ValueError(f"{context}: ForEach {nid!r}: config.outputs must be a dict")
-        for out_name, ref in out_decls.items():
-            if not isinstance(out_name, str) or not out_name:
-                raise ValueError(f"{context}: ForEach {nid!r}: bad output name {out_name!r}")
-            if not (isinstance(ref, str) and "." in ref):
+        _validate_output_decls(cfg.get("outputs"), label=f"ForEach {nid!r}", context=context)
+        body = _parse_subgraph_body(entry, label=f"ForEach {nid!r}", context=context)
+
+    elif ntype == "Branch":
+        if "condition" not in ins:
+            raise ValueError(f"{context}: Branch {nid!r}: inputs.condition is required")
+        _validate_output_decls(
+            cfg.get("outputs"), label=f"Branch {nid!r}", context=context, require_non_empty=True,
+        )
+        if "else_value" in cfg:
+            ev = cfg["else_value"]
+            if not (_is_const_ref(ev) or (isinstance(ev, str) and ev)):
                 raise ValueError(
-                    f"{context}: ForEach {nid!r}: output {out_name!r} must reference "
-                    f"a body node port like 'node.port', got {ref!r}"
+                    f"{context}: Branch {nid!r}: config.else_value must be a ref "
+                    f"string or a {{const: value}} dict, got {ev!r}"
                 )
-        raw_body = entry.get("body")
-        if not isinstance(raw_body, list) or not raw_body:
-            raise ValueError(f"{context}: ForEach {nid!r}: 'body' must be a non-empty list")
-        body = [_parse_node(b, context=f"ForEach {nid!r}.body") for b in raw_body]
-        # Body cannot contain Input/Output nodes.
-        for b in body:
-            if b.type in BODY_FORBIDDEN_TYPES:
-                raise ValueError(
-                    f"{context}: ForEach {nid!r}: body cannot contain {b.type!r} nodes"
-                )
-        # Local id uniqueness within body.
-        body_ids: set = set()
-        for b in body:
-            if b.id in body_ids:
-                raise ValueError(f"ForEach {nid!r}.body: duplicate node id {b.id!r}")
-            body_ids.add(b.id)
+        body = _parse_subgraph_body(entry, label=f"Branch {nid!r}", context=context)
+
+    elif ntype == "Compute":
+        op = cfg.get("op")
+        if op not in COMPUTE_OPS:
+            raise ValueError(
+                f"{context}: Compute {nid!r}: op must be one of "
+                f"{sorted(COMPUTE_OPS)}, got {op!r}"
+            )
+        required = set(COMPUTE_OPS[op]["inputs"])
+        provided = set(ins.keys())
+        missing = required - provided
+        if missing:
+            raise ValueError(
+                f"{context}: Compute {nid!r} op={op!r}: requires inputs "
+                f"{sorted(required)}, missing {sorted(missing)}"
+            )
 
     return NodeSpec(id=nid, type=ntype, config=cfg, inputs=ins, body=body)
+
+
+def _validate_output_decls(
+    out_decls: Any,
+    *,
+    label: str,
+    context: str,
+    require_non_empty: bool = False,
+) -> None:
+    """Shared validation for ForEach/Branch ``config.outputs`` declarations."""
+    if out_decls is None:
+        out_decls = {}
+    if not isinstance(out_decls, dict):
+        raise ValueError(f"{context}: {label}: config.outputs must be a dict")
+    if require_non_empty and not out_decls:
+        raise ValueError(f"{context}: {label}: config.outputs must be a non-empty dict")
+    for out_name, ref in out_decls.items():
+        if not isinstance(out_name, str) or not out_name:
+            raise ValueError(f"{context}: {label}: bad output name {out_name!r}")
+        if not (isinstance(ref, str) and "." in ref):
+            raise ValueError(
+                f"{context}: {label}: output {out_name!r} must reference "
+                f"a body node port like 'node.port', got {ref!r}"
+            )
+
+
+def _parse_subgraph_body(entry: dict, *, label: str, context: str) -> List[NodeSpec]:
+    """Shared body parsing for ForEach + Branch: type filter, dup id check, recursion."""
+    raw_body = entry.get("body")
+    if not isinstance(raw_body, list) or not raw_body:
+        raise ValueError(f"{context}: {label}: 'body' must be a non-empty list")
+    body = [_parse_node(b, context=f"{label}.body") for b in raw_body]
+    for b in body:
+        if b.type in BODY_FORBIDDEN_TYPES:
+            raise ValueError(
+                f"{context}: {label}: body cannot contain {b.type!r} nodes"
+            )
+    body_ids: set = set()
+    for b in body:
+        if b.id in body_ids:
+            raise ValueError(f"{label}.body: duplicate node id {b.id!r}")
+        body_ids.add(b.id)
+    return body
 
 
 def _validate_refs(
@@ -291,11 +378,43 @@ def _validate_foreach(node: NodeSpec, *, outer_ids: set) -> None:
     # Topo-sort body. Externals (outer + item_var) are skipped as deps.
     _topo_sort(node.body, external_ids=outer_ids | {item_var})
 
-    # Recurse for nested ForEach.
+    # Recurse for nested ForEach / Branch.
     nested_outer = outer_ids | body_ids | {item_var}
     for b in node.body:
         if b.type == "ForEach":
             _validate_foreach(b, outer_ids=nested_outer)
+        elif b.type == "Branch":
+            _validate_branch(b, outer_ids=nested_outer)
+
+
+def _validate_branch(node: NodeSpec, *, outer_ids: set) -> None:
+    """Validate one Branch: body refs + cycle check + nested recursion."""
+    assert node.type == "Branch" and node.body is not None
+    body_ids = {b.id for b in node.body}
+
+    # Output declarations must reference body nodes.
+    for out_name, ref in node.config.get("outputs", {}).items():
+        head = ref.split(".", 1)[0]
+        if head not in body_ids:
+            raise ValueError(
+                f"Branch {node.id!r}: output {out_name!r} references {head!r} "
+                f"which is not a body node"
+            )
+
+    allowed = outer_ids | body_ids
+    _validate_refs(node.body, allowed_ids=allowed, item_vars=set(),
+                   context=f"Branch {node.id!r}.body")
+
+    # Topo-sort body. Externals (outer) are skipped as deps.
+    _topo_sort(node.body, external_ids=outer_ids)
+
+    # Recurse for nested ForEach / Branch inside the body.
+    nested_outer = outer_ids | body_ids
+    for b in node.body:
+        if b.type == "ForEach":
+            _validate_foreach(b, outer_ids=nested_outer)
+        elif b.type == "Branch":
+            _validate_branch(b, outer_ids=nested_outer)
 
 
 def _topo_sort(
@@ -423,6 +542,10 @@ class PipelineExecutor:
             return self._call_llm(node, resolved)
         if node.type == "ForEach":
             return self._run_foreach(node, resolved, env, item_bindings=item_bindings)
+        if node.type == "Branch":
+            return self._run_branch(node, resolved, env, item_bindings=item_bindings)
+        if node.type == "Compute":
+            return self._run_compute(node, resolved)
         raise ValueError(f"Unknown node type {node.type!r}")
 
     def _resolve_inputs(
@@ -488,6 +611,57 @@ class PipelineExecutor:
                 self._iter_stack.pop()
 
         return collected
+
+    # ----- Branch -----
+
+    def _run_branch(
+        self,
+        node: NodeSpec,
+        resolved_inputs: Dict[str, Any],
+        env: Dict[str, Dict[str, Any]],
+        *,
+        item_bindings: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cond_truthy = bool(resolved_inputs.get("condition", False))
+        declared_outputs: Dict[str, str] = node.config.get("outputs") or {}
+        else_ref: Any = node.config.get("else_value", {"const": None})
+
+        if not cond_truthy:
+            falsy_val = _resolve_ref(
+                else_ref, env, item_bindings,
+                hint=f"{node.id}.else_value",
+            )
+            return {name: falsy_val for name in declared_outputs}
+
+        # Truthy: run the body once and collect declared outputs.
+        body_nodes = node.body or []
+        external_ids = set(env.keys()) | set(item_bindings.keys())
+        body_order = _topo_sort(body_nodes, external_ids=external_ids)
+
+        sub_env: Dict[str, Dict[str, Any]] = dict(env)
+        for body_node in body_order:
+            sub_env[body_node.id] = self._eval_node(
+                body_node, sub_env, item_bindings=item_bindings,
+            )
+        return {
+            out_name: _resolve_ref(
+                ref, sub_env, item_bindings,
+                hint=f"{node.id}.outputs.{out_name}",
+            )
+            for out_name, ref in declared_outputs.items()
+        }
+
+    # ----- Compute -----
+
+    def _run_compute(self, node: NodeSpec, resolved_inputs: Dict[str, Any]) -> Dict[str, Any]:
+        op_name = node.config["op"]
+        spec = COMPUTE_OPS[op_name]
+        try:
+            return spec["fn"](resolved_inputs)
+        except (TypeError, KeyError, ValueError, ZeroDivisionError) as e:
+            raise ValueError(
+                f"Compute {node.id!r} op={op_name!r}: {type(e).__name__}: {e}"
+            ) from e
 
     # ----- trace step name (suffixed by iter indices when inside a loop) -----
 
