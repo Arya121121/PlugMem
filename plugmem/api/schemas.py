@@ -710,6 +710,17 @@ class SpecVersionContentResponse(BaseModel):
     content: str
 
 
+class PipelineSpecSample(BaseModel):
+    key: str
+    label: str
+    description: str
+    content: str
+
+
+class PipelineSpecSamplesResponse(BaseModel):
+    samples: List[PipelineSpecSample]
+
+
 # ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #

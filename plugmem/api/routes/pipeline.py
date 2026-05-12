@@ -37,6 +37,8 @@ from plugmem.api.schemas import (
     PipelineBindingResponse,
     PipelineInfo,
     PipelineListResponse,
+    PipelineSpecSample,
+    PipelineSpecSamplesResponse,
     PipelineStatsResponse,
     PipelineStepStats,
     SpecDocumentResponse,
@@ -67,8 +69,9 @@ from plugmem.pipelines import (
     is_registered as pipeline_is_registered,
     list_pipelines as list_registered_pipelines,
 )
-from plugmem.pipelines import spec_storage
+from plugmem.pipelines import pipeline_views, spec_storage
 from plugmem.pipelines.spec_driven import load_yaml_str
+from plugmem.pipelines.sample_specs import PLUGMEM_DEFAULT_RETRIEVE_YAML
 from plugmem.prompts.registry import PromptRegistry, TemplatePrompt
 
 logger = logging.getLogger(__name__)
@@ -439,6 +442,40 @@ def get_trace(graph_id: str, trace_id: str) -> TraceDetailResponse:
         meta=row.get("meta") or {},
         steps=[TraceStep(**s) for s in (row.get("steps") or [])],
     )
+
+
+# ------------------------------------------------------------------ #
+# Per-pipeline visualization view (Phase 6.5a follow-up)
+# ------------------------------------------------------------------ #
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/spec_view",
+    response_model=PipelineSpecResponse,
+)
+def get_pipeline_spec_view(graph_id: str) -> PipelineSpecResponse:
+    """Return the visualization spec for whichever pipeline is bound to *graph_id*.
+
+    - ``plugmem-default``  → static spec from ``pipeline_spec.py``.
+    - ``naive-rag``        → hand-coded baseline spec.
+    - ``spec-driven``      → derived from the saved YAML; empty placeholder
+                             if no YAML has been saved yet.
+    """
+    gm = _check_graph_exists(graph_id)
+    name = gm.storage.get_pipeline_name(graph_id)
+    return PipelineSpecResponse(**pipeline_views.view_for_pipeline(name, graph_id=graph_id))
+
+
+@router.get("/samples", response_model=PipelineSpecSamplesResponse)
+def list_pipeline_spec_samples() -> PipelineSpecSamplesResponse:
+    """Starter YAMLs the editor can paste as a starting point."""
+    from plugmem.pipelines.sample_specs import SAMPLES
+    rows = [
+        PipelineSpecSample(key=k, label=v["label"], description=v["description"],
+                           content=v["content"])
+        for k, v in SAMPLES.items()
+    ]
+    return PipelineSpecSamplesResponse(samples=rows)
 
 
 # ------------------------------------------------------------------ #

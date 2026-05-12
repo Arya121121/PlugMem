@@ -231,6 +231,34 @@ and a "Spec editor" panel above the canvas (only shown when bound to
 behaviors (atomic save, parent tracking, rollback, adopt) + route layer
 (get/put/validate/list/rollback/end-to-end retrieve).
 
+### Pipeline-aware visualization (6.5a follow-up)
+
+The Pipeline tab canvas now reflects the bound pipeline of the current
+graph, not a static dump of `plugmem-default`:
+
+| Binding | Source |
+|---|---|
+| `plugmem-default` | `plugmem.core.pipeline_spec.to_dict()` (hand-curated, 6 phases) |
+| `naive-rag` | Hand-coded 3-phase spec in `pipeline_views.naive_rag_spec()` |
+| `spec-driven` | Live conversion of the saved YAML → PipelineSpec shape (`pipeline_views.spec_driven_spec`) |
+
+Route: `GET /api/v1/graphs/{gid}/pipeline/spec_view` — dispatches via
+`pipeline_views.view_for_pipeline(name, graph_id=gid)`. The UI calls
+this on initial load, on every binding swap, on every save, and on
+every rollback so the canvas stays in lock-step with the running spec.
+
+### Starter YAML samples (6.5a follow-up)
+
+`GET /api/v1/pipeline/samples` returns ready-to-paste sample YAMLs from
+`plugmem.pipelines.sample_specs`. The Spec editor has an "Insert
+template" button + select that pastes the chosen sample into the
+textarea. Shipped sample:
+
+- **plugmem-default retrieve** — mirrors `PlugMemDefaultPipeline.retrieve`
+  (`get_plan` → `get_mode` → render `reasoning_semantic`). Storage reads
+  are stubbed with explicit placeholder constants since the MVP grammar
+  has no `StorageRead` / `Embed` nodes yet (those land in Phase 6.6).
+
 ---
 
 ## Phase 6.5b / 6.5c — Interactive canvas + Python hot-reload (deferred)

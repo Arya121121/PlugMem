@@ -121,6 +121,8 @@ export function mountPipeline({ container, getGraphId, toast }) {
     specEditorSave: container.querySelector("#pipeline-spec-editor-save"),
     specEditorStatus: container.querySelector("#pipeline-spec-editor-status"),
     specVersionsList: container.querySelector("#pipeline-spec-versions-list"),
+    specSampleSelect: container.querySelector("#pipeline-spec-sample-select"),
+    specSampleInsert: container.querySelector("#pipeline-spec-sample-insert"),
   };
 
   let spec = null;
@@ -139,6 +141,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
   let savedSpecContent = "";
   let savedSpecVersionId = null;
   let savedSpecPath = "";
+  let availableSamples = [];
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
@@ -174,12 +177,24 @@ export function mountPipeline({ container, getGraphId, toast }) {
     });
   }
 
+  async function fetchSpec() {
+    const gid = getGraphId();
+    if (gid) {
+      try {
+        return await api.getPipelineSpecView(gid);
+      } catch (err) {
+        console.warn("spec_view failed, falling back to static spec:", err);
+      }
+    }
+    return await api.getPipelineSpec();
+  }
+
   async function load() {
     if (loaded) return;
     els.empty.hidden = false;
     els.empty.textContent = "Loading pipeline…";
     try {
-      const [s, mod] = await Promise.all([api.getPipelineSpec(), loadXyflow()]);
+      const [s, mod] = await Promise.all([fetchSpec(), loadXyflow()]);
       spec = s;
       xyflowMod = mod;
       currentGraphId = getGraphId();
@@ -188,6 +203,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         refreshModelInfo(),
         refreshStepStats(),
         refreshAvailablePipelines(),
+        refreshSamples(),
       ]);
       renderSidebar();
       void refreshTraces();
@@ -1306,6 +1322,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       await api.rollbackPipelineSpecVersion(gid, vid);
       toast(`Rolled back to ${vid.slice(0, 24)}…`);
       await Promise.all([refreshSpecEditor(), refreshSpecVersions()]);
+      if (currentBinding === "spec-driven") await reloadCanvasForBinding();
     } catch (err) {
       toast(`Rollback failed: ${err.message}`, "error");
     }
@@ -1345,6 +1362,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       setEditorStatus(`Saved as ${savedSpecVersionId}.`, "ok");
       toast(`Spec saved (${savedSpecVersionId.slice(0, 22)}…)`);
       await refreshSpecVersions();
+      if (currentBinding === "spec-driven") await reloadCanvasForBinding();
     } catch (err) {
       setEditorStatus(err.message, "err");
     } finally {
@@ -1358,6 +1376,16 @@ export function mountPipeline({ container, getGraphId, toast }) {
     els.specEditorTextarea.classList.remove("dirty");
     els.specEditorDiscard.disabled = true;
     setEditorStatus("Reverted to active version.", "ok");
+  }
+
+  async function reloadCanvasForBinding() {
+    try {
+      spec = await fetchSpec();
+      if (xyflowMod) mountReactApp(xyflowMod);
+      renderSidebar();
+    } catch (err) {
+      console.warn("reloadCanvasForBinding failed:", err);
+    }
   }
 
   els.bindingSelect?.addEventListener("change", async (e) => {
@@ -1375,6 +1403,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
       if (next === "spec-driven") {
         await Promise.all([refreshSpecEditor(), refreshSpecVersions()]);
       }
+      await reloadCanvasForBinding();
     } catch (err) {
       toast(`set pipeline: ${err.message}`, "error");
       // Revert UI selection.
@@ -1382,10 +1411,41 @@ export function mountPipeline({ container, getGraphId, toast }) {
     }
   });
 
+  async function refreshSamples() {
+    if (availableSamples.length || !els.specSampleSelect) return;
+    try {
+      const res = await api.listPipelineSpecSamples();
+      availableSamples = res.samples || [];
+    } catch (err) {
+      availableSamples = [];
+      console.warn("listPipelineSpecSamples failed:", err);
+    }
+    els.specSampleSelect.innerHTML = "";
+    for (const s of availableSamples) {
+      const opt = document.createElement("option");
+      opt.value = s.key;
+      opt.textContent = s.label;
+      opt.title = s.description || "";
+      els.specSampleSelect.appendChild(opt);
+    }
+  }
+
+  function insertSelectedSample() {
+    const key = els.specSampleSelect?.value;
+    const sample = availableSamples.find((s) => s.key === key);
+    if (!sample || !els.specEditorTextarea) return;
+    const cur = els.specEditorTextarea.value.trim();
+    if (cur && !confirm("Replace the current editor contents with the sample?")) return;
+    els.specEditorTextarea.value = sample.content;
+    markDirty();
+    setEditorStatus(`Inserted sample: ${sample.label}. Click Save new version to persist.`, "ok");
+  }
+
   els.specEditorTextarea?.addEventListener("input", markDirty);
   els.specEditorValidate?.addEventListener("click", validateEditor);
   els.specEditorSave?.addEventListener("click", saveEditor);
   els.specEditorDiscard?.addEventListener("click", discardEditorChanges);
+  els.specSampleInsert?.addEventListener("click", insertSelectedSample);
   els.specEditorToggle?.addEventListener("click", () => {
     const isCollapsed = els.specEditor.classList.toggle("collapsed");
     els.specEditorToggle.textContent = isCollapsed ? "Expand" : "Collapse";
@@ -1404,7 +1464,8 @@ export function mountPipeline({ container, getGraphId, toast }) {
         activePromptStep = null;
         await Promise.all([refreshPromptInfo(), refreshStepStats(), refreshBinding()]);
         void refreshTraces();
-        if (xyflowMod) mountReactApp(xyflowMod);
+        // Binding may have changed — refetch the spec view + re-render.
+        await reloadCanvasForBinding();
       }
     },
   };

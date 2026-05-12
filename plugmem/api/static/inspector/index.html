@@ -238,6 +238,11 @@
             <button type="button" id="pipeline-spec-editor-toggle" class="btn btn-ghost">Collapse</button>
           </header>
           <div class="pipeline-spec-editor-body">
+            <div class="pipeline-spec-editor-row">
+              <span class="hint">Start from a sample:</span>
+              <select id="pipeline-spec-sample-select" class="pipeline-spec-sample-select"></select>
+              <button type="button" id="pipeline-spec-sample-insert" class="btn">Insert template</button>
+            </div>
             <textarea id="pipeline-spec-editor-textarea"
                       spellcheck="false" autocomplete="off"
                       placeholder="phase: retrieve&#10;nodes:&#10;  - { id: in, type: Input }&#10;  - id: out&#10;    type: Output&#10;    inputs:&#10;      mode: { const: semantic_memory }&#10;      reasoning_prompt: { const: [] }&#10;      variables: { const: {} }"></textarea>

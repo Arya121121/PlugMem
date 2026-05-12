@@ -92,6 +92,9 @@ export const api = {
       `/graphs/${encodeURIComponent(gid)}/sessions/${encodeURIComponent(sessionId)}`,
     ),
   getPipelineSpec: () => request("GET", "/pipeline/spec"),
+  getPipelineSpecView: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/spec_view`),
+  listPipelineSpecSamples: () => request("GET", "/pipeline/samples"),
   listPipelinePrompts: (gid) =>
     request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts`),
   updatePipelinePrompt: (gid, name, body) =>
