@@ -148,3 +148,68 @@ def test_grammar_doc_mentions_every_compute_op():
         assert f"`{op}`" in text, (
             f"Compute op {op!r} not mentioned in {GRAMMAR_DOC_PATH.name}"
         )
+
+
+# --------------------------------------------------------------------- #
+# Tutorial doc cross-references stay valid
+# --------------------------------------------------------------------- #
+
+
+TUTORIAL_DOC_PATH = REPO_ROOT / "docs" / "spec_driven_tutorial.md"
+
+
+def test_tutorial_doc_exists_and_references_resolve():
+    """The tutorial's relative links must point at real files in-repo."""
+    assert TUTORIAL_DOC_PATH.is_file(), TUTORIAL_DOC_PATH
+    text = TUTORIAL_DOC_PATH.read_text()
+    import re
+    # Pull every relative markdown link from the doc.
+    refs = re.findall(r"\]\(([^)]+)\)", text)
+    repo_relative = [r for r in refs if not r.startswith(("http", "#"))]
+    assert repo_relative, "Tutorial has no internal cross-references"
+    for ref in repo_relative:
+        # Links resolve relative to docs/ (where the tutorial lives) OR
+        # to the repo root (for plugmem/, tests/ paths).
+        candidates = [
+            TUTORIAL_DOC_PATH.parent / ref,
+            REPO_ROOT / ref,
+        ]
+        assert any(c.exists() for c in candidates), (
+            f"Tutorial references missing path: {ref!r}"
+        )
+
+
+def test_tutorial_quotes_exact_validator_error():
+    """The error message the tutorial promises must match the loader's
+    actual output verbatim. If we rephrase the validator, the tutorial
+    needs to follow — this test makes that drift visible."""
+    from plugmem.pipelines.spec_driven import load_yaml_str
+    bad = (
+        "phase: retrieve\n"
+        "nodes:\n"
+        "  - { id: in, type: Input }\n"
+        "  - id: ghost\n"
+        "    type: LLMCall\n"
+        "    config: { role: reasoning }\n"
+        "    inputs:\n"
+        "      text: nonexistent.value\n"
+        "  - { id: out, type: Output, inputs: { mode: { const: x },"
+        " reasoning_prompt: { const: [] }, variables: { const: {} } } }\n"
+    )
+    try:
+        load_yaml_str(bad)
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        actual = str(e)
+    quoted = ("top-level: node 'ghost' input 'text': references unknown "
+              "node 'nonexistent'")
+    assert quoted in actual, (
+        f"Loader error changed from what the tutorial quotes.\n"
+        f"  quoted: {quoted!r}\n"
+        f"  actual: {actual!r}"
+    )
+    # And the tutorial must contain the quoted line.
+    tutorial = TUTORIAL_DOC_PATH.read_text()
+    assert quoted in tutorial, (
+        f"Tutorial doesn't contain the expected error line: {quoted!r}"
+    )
