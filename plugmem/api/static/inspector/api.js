@@ -95,6 +95,7 @@ export const api = {
   getPipelineSpecView: (gid) =>
     request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/spec_view`),
   listPipelineSpecSamples: () => request("GET", "/pipeline/samples"),
+  listPipelineNodeSnippets: () => request("GET", "/pipeline/node_snippets"),
   listPipelinePrompts: (gid) =>
     request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts`),
   updatePipelinePrompt: (gid, name, body) =>

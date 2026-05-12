@@ -212,3 +212,145 @@ SAMPLES = {
         "content": PLUGMEM_DEFAULT_RETRIEVE_YAML,
     },
 }
+
+
+# ----------------------------------------------------------------------- #
+# Node snippets — single-node stubs the editor palette inserts at the
+# cursor. Each value is a chunk of valid YAML that, when pasted into the
+# `nodes:` list of a pipeline, parses cleanly through the loader (after
+# the author fills in the placeholders).
+# ----------------------------------------------------------------------- #
+
+
+NODE_SNIPPETS: dict = {
+    "Input": {
+        "label": "Input",
+        "description": "Phase entry. Outputs are the request body fields.",
+        "snippet": "  - { id: in, type: Input }\n",
+    },
+    "Output": {
+        "label": "Output",
+        "description": "Phase exit. Inputs become the response payload.",
+        "snippet": (
+            "  - id: out\n"
+            "    type: Output\n"
+            "    inputs:\n"
+            "      mode: { const: semantic_memory }\n"
+            "      reasoning_prompt: { const: [] }\n"
+            "      variables: { const: {} }\n"
+        ),
+    },
+    "LLMCall (prompt-mode)": {
+        "label": "LLMCall · prompt-mode",
+        "description": "Renders a registered prompt with inputs as variables, then calls the LLM.",
+        "snippet": (
+            "  - id: my_llm_call\n"
+            "    type: LLMCall\n"
+            "    config: { prompt: <prompt_name>, role: retrieval }\n"
+            "    inputs:\n"
+            "      observation: in.observation\n"
+        ),
+    },
+    "LLMCall (text-mode)": {
+        "label": "LLMCall · text-mode",
+        "description": "Wraps a rendered string as a user message; pairs with PromptRender.value.",
+        "snippet": (
+            "  - id: my_reasoning_call\n"
+            "    type: LLMCall\n"
+            "    config: { role: reasoning }\n"
+            "    inputs:\n"
+            "      text: <upstream_node>.value\n"
+        ),
+    },
+    "PromptRender": {
+        "label": "PromptRender",
+        "description": "Renders a registered prompt to a string (`value`) and a messages list (`messages`).",
+        "snippet": (
+            "  - id: my_render\n"
+            "    type: PromptRender\n"
+            "    config: { prompt: <prompt_name> }\n"
+            "    inputs:\n"
+            "      observation: in.observation\n"
+        ),
+    },
+    "Constant": {
+        "label": "Constant",
+        "description": "Emits a fixed value (any YAML literal).",
+        "snippet": (
+            "  - id: my_const\n"
+            "    type: Constant\n"
+            "    config: { value: \"<your value>\" }\n"
+        ),
+    },
+    "Compute": {
+        "label": "Compute",
+        "description": "Single op (eq/ne/lt/gt/and/or/not/length/contains/concat/...). Outputs `value`.",
+        "snippet": (
+            "  - id: my_compute\n"
+            "    type: Compute\n"
+            "    config: { op: eq }\n"
+            "    inputs:\n"
+            "      a: <ref_or_const>\n"
+            "      b: { const: \"<value>\" }\n"
+        ),
+    },
+    "StorageRead": {
+        "label": "StorageRead",
+        "description": "Reads from the graph's chroma collection (semantic / procedural / episodic).",
+        "snippet": (
+            "  - id: my_storage_read\n"
+            "    type: StorageRead\n"
+            "    config: { collection: semantic }\n"
+            "    inputs:\n"
+            "      query: in.observation\n"
+            "      tags: { const: [] }\n"
+        ),
+    },
+    "Embed": {
+        "label": "Embed",
+        "description": "Wraps graph.embedder.embed(text); outputs `embedding` (list[float]).",
+        "snippet": (
+            "  - id: my_embed\n"
+            "    type: Embed\n"
+            "    inputs:\n"
+            "      text: in.observation\n"
+        ),
+    },
+    "ForEach": {
+        "label": "ForEach",
+        "description": "Iterates a list; body runs once per element; declared outputs collected into lists.",
+        "snippet": (
+            "  - id: my_loop\n"
+            "    type: ForEach\n"
+            "    inputs:\n"
+            "      items: <list_ref>\n"
+            "    config:\n"
+            "      item_var: item\n"
+            "      outputs:\n"
+            "        results: body_node.raw\n"
+            "    body:\n"
+            "      - id: body_node\n"
+            "        type: LLMCall\n"
+            "        config: { prompt: <prompt_name>, role: retrieval }\n"
+            "        inputs:\n"
+            "          observation: item\n"
+        ),
+    },
+    "Branch": {
+        "label": "Branch",
+        "description": "Conditionally runs a body subgraph; surfaces declared outputs or `else_value`.",
+        "snippet": (
+            "  - id: my_branch\n"
+            "    type: Branch\n"
+            "    inputs: { condition: <bool_ref> }\n"
+            "    config:\n"
+            "      outputs: { result: body_node.value }\n"
+            "      else_value: { const: \"\" }\n"
+            "    body:\n"
+            "      - id: body_node\n"
+            "        type: Constant\n"
+            "        config: { value: \"ran\" }\n"
+        ),
+    },
+}
+

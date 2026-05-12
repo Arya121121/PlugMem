@@ -175,6 +175,38 @@ def test_samples_endpoint_lists_default(client):
     assert "plugmem-default" in keys
 
 
+def test_node_snippets_endpoint_covers_every_node_type(client):
+    """/pipeline/node_snippets ships a snippet for every NODE_TYPES entry."""
+    from plugmem.pipelines.spec_driven import NODE_TYPES
+    r = client.get("/api/v1/pipeline/node_snippets")
+    assert r.status_code == 200
+    snippets = r.json()["snippets"]
+    # One snippet per node type, except LLMCall ships two (prompt-mode +
+    # text-mode) because the two modes are how users actually interact
+    # with that node. So: snippet count >= NODE_TYPES count.
+    assert len(snippets) >= len(NODE_TYPES)
+    labels = " ".join(s["label"] for s in snippets)
+    for t in NODE_TYPES:
+        # Each node type's label or key should appear somewhere.
+        assert t in labels or any(t in s["key"] for s in snippets), (
+            f"Node type {t!r} not surfaced by any snippet."
+        )
+
+
+def test_node_snippets_are_yaml_compatible_fragments(client):
+    """Each snippet should be a `- id: ...` list-item chunk so it can be
+    pasted into a `nodes:` list. (Doesn't have to parse standalone.)"""
+    r = client.get("/api/v1/pipeline/node_snippets")
+    for s in r.json()["snippets"]:
+        snippet = s["snippet"]
+        assert snippet.startswith("  - "), (
+            f"Snippet {s['key']!r} doesn't start with `  - `: {snippet[:40]!r}"
+        )
+        assert snippet.endswith("\n"), (
+            f"Snippet {s['key']!r} missing trailing newline."
+        )
+
+
 def test_sample_yaml_validates(client):
     """The shipped starter YAML must parse cleanly through the loader."""
     g = load_yaml_str(PLUGMEM_DEFAULT_RETRIEVE_YAML)

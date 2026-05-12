@@ -721,6 +721,17 @@ class PipelineSpecSamplesResponse(BaseModel):
     samples: List[PipelineSpecSample]
 
 
+class PipelineNodeSnippet(BaseModel):
+    key: str
+    label: str
+    description: str
+    snippet: str
+
+
+class PipelineNodeSnippetsResponse(BaseModel):
+    snippets: List[PipelineNodeSnippet]
+
+
 # ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #

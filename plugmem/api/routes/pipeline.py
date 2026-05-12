@@ -37,6 +37,8 @@ from plugmem.api.schemas import (
     PipelineBindingResponse,
     PipelineInfo,
     PipelineListResponse,
+    PipelineNodeSnippet,
+    PipelineNodeSnippetsResponse,
     PipelineSpecSample,
     PipelineSpecSamplesResponse,
     PipelineStatsResponse,
@@ -476,6 +478,18 @@ def list_pipeline_spec_samples() -> PipelineSpecSamplesResponse:
         for k, v in SAMPLES.items()
     ]
     return PipelineSpecSamplesResponse(samples=rows)
+
+
+@router.get("/node_snippets", response_model=PipelineNodeSnippetsResponse)
+def list_pipeline_node_snippets() -> PipelineNodeSnippetsResponse:
+    """Per-node-type YAML stubs the editor palette inserts at the cursor."""
+    from plugmem.pipelines.sample_specs import NODE_SNIPPETS
+    rows = [
+        PipelineNodeSnippet(key=k, label=v["label"], description=v["description"],
+                            snippet=v["snippet"])
+        for k, v in NODE_SNIPPETS.items()
+    ]
+    return PipelineNodeSnippetsResponse(snippets=rows)
 
 
 # ------------------------------------------------------------------ #

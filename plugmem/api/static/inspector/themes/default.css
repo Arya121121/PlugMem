@@ -1832,3 +1832,41 @@ details[open] summary { margin-bottom: var(--space); }
   white-space: nowrap;
 }
 .pipeline-spec-version-row .btn { font-size: var(--fs-small); padding: 2px 8px; }
+
+/* ------------------------------------------------------------------ */
+/* Spec editor — node-snippet palette (Phase 6.5b stepping stone)      */
+/* ------------------------------------------------------------------ */
+.pipeline-spec-palette {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+.pipeline-spec-palette summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  user-select: none;
+}
+.pipeline-spec-palette[open] summary {
+  margin-bottom: 6px;
+}
+.pipeline-spec-palette-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pipeline-spec-palette-chip {
+  appearance: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font: inherit;
+  font-size: var(--fs-small);
+  color: var(--fg);
+  cursor: pointer;
+}
+.pipeline-spec-palette-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}

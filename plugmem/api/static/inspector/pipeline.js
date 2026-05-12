@@ -128,6 +128,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
     specVersionsList: container.querySelector("#pipeline-spec-versions-list"),
     specSampleSelect: container.querySelector("#pipeline-spec-sample-select"),
     specSampleInsert: container.querySelector("#pipeline-spec-sample-insert"),
+    specPaletteChips: container.querySelector("#pipeline-spec-palette-chips"),
   };
 
   let spec = null;
@@ -147,6 +148,10 @@ export function mountPipeline({ container, getGraphId, toast }) {
   let savedSpecVersionId = null;
   let savedSpecPath = "";
   let availableSamples = [];
+  let availableNodeSnippets = [];
+  // Track the textarea's cursor so palette inserts land where the user
+  // last clicked, even though clicking a palette chip blurs the textarea.
+  let lastEditorCursor = 0;
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
@@ -209,6 +214,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         refreshStepStats(),
         refreshAvailablePipelines(),
         refreshSamples(),
+        refreshNodeSnippets(),
       ]);
       renderSidebar();
       void refreshTraces();
@@ -1469,6 +1475,55 @@ export function mountPipeline({ container, getGraphId, toast }) {
     }
   }
 
+  async function refreshNodeSnippets() {
+    if (availableNodeSnippets.length || !els.specPaletteChips) return;
+    try {
+      const res = await api.listPipelineNodeSnippets();
+      availableNodeSnippets = res.snippets || [];
+    } catch (err) {
+      availableNodeSnippets = [];
+      console.warn("listPipelineNodeSnippets failed:", err);
+      return;
+    }
+    els.specPaletteChips.innerHTML = "";
+    for (const s of availableNodeSnippets) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "pipeline-spec-palette-chip";
+      chip.textContent = s.label;
+      chip.title = s.description || "";
+      chip.addEventListener("click", () => insertNodeSnippet(s));
+      els.specPaletteChips.appendChild(chip);
+    }
+  }
+
+  function insertNodeSnippet(snippet) {
+    const ta = els.specEditorTextarea;
+    if (!ta || !snippet?.snippet) return;
+    const text = ta.value;
+    // Insert at the last known cursor position (clicking a chip blurs
+    // the textarea, so we can't read selectionStart here reliably).
+    let pos = lastEditorCursor;
+    if (pos < 0 || pos > text.length) pos = text.length;
+    // Snap to a line break so we don't split a node mid-definition.
+    let insertAt = pos;
+    if (insertAt > 0 && text[insertAt - 1] !== "\n") {
+      const nextNl = text.indexOf("\n", insertAt);
+      insertAt = nextNl === -1 ? text.length : nextNl + 1;
+    }
+    const before = text.slice(0, insertAt);
+    const after = text.slice(insertAt);
+    const block = snippet.snippet.endsWith("\n") ? snippet.snippet : snippet.snippet + "\n";
+    ta.value = before + block + after;
+    // Move the cursor to the end of the inserted block.
+    const newCursor = insertAt + block.length;
+    ta.focus();
+    ta.setSelectionRange(newCursor, newCursor);
+    lastEditorCursor = newCursor;
+    markDirty();
+    setEditorStatus(`Inserted ${snippet.label}. Edit the placeholders and Save.`, "ok");
+  }
+
   function insertSelectedSample() {
     const key = els.specSampleSelect?.value;
     const sample = availableSamples.find((s) => s.key === key);
@@ -1481,6 +1536,12 @@ export function mountPipeline({ container, getGraphId, toast }) {
   }
 
   els.specEditorTextarea?.addEventListener("input", markDirty);
+  els.specEditorTextarea?.addEventListener("keyup", () => {
+    lastEditorCursor = els.specEditorTextarea.selectionStart;
+  });
+  els.specEditorTextarea?.addEventListener("click", () => {
+    lastEditorCursor = els.specEditorTextarea.selectionStart;
+  });
   els.specEditorValidate?.addEventListener("click", validateEditor);
   els.specEditorSave?.addEventListener("click", saveEditor);
   els.specEditorDiscard?.addEventListener("click", discardEditorChanges);

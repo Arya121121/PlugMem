@@ -243,6 +243,10 @@
               <select id="pipeline-spec-sample-select" class="pipeline-spec-sample-select"></select>
               <button type="button" id="pipeline-spec-sample-insert" class="btn">Insert template</button>
             </div>
+            <details class="pipeline-spec-palette">
+              <summary>Insert a node…</summary>
+              <div id="pipeline-spec-palette-chips" class="pipeline-spec-palette-chips"></div>
+            </details>
             <textarea id="pipeline-spec-editor-textarea"
                       spellcheck="false" autocomplete="off"
                       placeholder="phase: retrieve&#10;nodes:&#10;  - { id: in, type: Input }&#10;  - id: out&#10;    type: Output&#10;    inputs:&#10;      mode: { const: semantic_memory }&#10;      reasoning_prompt: { const: [] }&#10;      variables: { const: {} }"></textarea>
