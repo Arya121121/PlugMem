@@ -30,7 +30,7 @@ algorithm itself with a custom pipeline.
 | 6.6b-1 | `/reason` via spec-driven (reuses retrieve YAML, reshapes output) | shipped |
 | 6.6b-2 | Multi-phase YAML format + dedicated `reason` phase + Compute(similarity) | shipped |
 | 6.5b-mvp | Canvas edit mode: drag-to-reposition + sidecar layout file | shipped |
-| 6.5c | Python hot-reload for forked pipeline modules | future |
+| 6.5c | Pipeline hot-reload endpoint (env-flagged) | shipped |
 | 6.5b-full | Drag-from-palette / port-wiring / structural edits on canvas | future |
 | 6.6b-3 | Spec-driven coverage of close / insert / consolidate logic | future |
 

@@ -658,6 +658,11 @@ class PipelineBindingRequest(BaseModel):
     pipeline: str
 
 
+class PipelineReloadResponse(BaseModel):
+    reloaded_modules: List[str]
+    registered: List[str]
+
+
 # ------------------------------------------------------------------ #
 # Spec-driven YAML editor (Phase 6.5a)
 # ------------------------------------------------------------------ #

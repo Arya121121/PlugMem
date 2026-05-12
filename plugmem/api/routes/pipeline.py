@@ -43,6 +43,7 @@ from plugmem.api.schemas import (
     PipelineListResponse,
     PipelineNodeSnippet,
     PipelineNodeSnippetsResponse,
+    PipelineReloadResponse,
     PipelineSpecSample,
     PipelineSpecSamplesResponse,
     PipelineStatsResponse,
@@ -147,6 +148,33 @@ def list_pipelines_endpoint() -> PipelineListResponse:
     return PipelineListResponse(
         pipelines=[PipelineInfo(**r) for r in rows],
         default=DEFAULT_PIPELINE_NAME,
+    )
+
+
+@router.post("/pipelines/reload", response_model=PipelineReloadResponse)
+def reload_pipelines_endpoint() -> PipelineReloadResponse:
+    """Hot-reload all ``plugmem.pipelines.*`` modules so on-disk Python
+    edits take effect without restarting the server.
+
+    Gated by the ``PLUGMEM_ENABLE_PIPELINE_RELOAD`` env var because
+    in-process ``importlib.reload`` is researcher-grade: existing
+    references held by long-lived objects keep pointing at old classes,
+    and the loader has no sandbox.
+    """
+    import os
+    if os.getenv("PLUGMEM_ENABLE_PIPELINE_RELOAD", "").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Pipeline hot-reload is disabled. Set "
+                "PLUGMEM_ENABLE_PIPELINE_RELOAD=1 on the server to enable."
+            ),
+        )
+    from plugmem.pipelines.registry import reload_pipeline_modules
+    reloaded = reload_pipeline_modules()
+    registered = [p["name"] for p in list_registered_pipelines()]
+    return PipelineReloadResponse(
+        reloaded_modules=reloaded, registered=registered,
     )
 
 

@@ -1242,14 +1242,20 @@ def test_storage_read_loader_rejects_missing_inputs(tmp_path):
 
 
 def test_storage_read_semantic_returns_facts_when_seeded(graph_manager, fake_embedder, tmp_path):
-    """StorageRead on a graph with semantic nodes returns formatted 'Fact i: ...' text."""
+    """StorageRead on a graph with semantic nodes returns formatted 'Fact i: ...' text.
+
+    Uses a query string that's identical to one seeded fact so the
+    cosine similarity is exactly 1.0 — guarantees the
+    ``SemanticRelevant`` value function clears its threshold regardless
+    of FakeEmbedder's hash-randomized embeddings.
+    """
     from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
     from plugmem.core.graph_node import SemanticNode
 
     graph_manager.create_graph("g-storage-sem")
     mg = graph_manager.get_graph("g-storage-sem")
-    # Seed two semantic nodes with deterministic embeddings.
-    for i, text in enumerate(["FastAPI deploys via Docker.", "Auth uses JWT."]):
+    seeded_facts = ["FastAPI deploys via Docker.", "Auth uses JWT."]
+    for i, text in enumerate(seeded_facts):
         node = SemanticNode(
             semantic_id=i, semantic_memory_str=text,
             embedding=fake_embedder.embed(text),
@@ -1275,10 +1281,13 @@ def test_storage_read_semantic_returns_facts_when_seeded(graph_manager, fake_emb
               variables: fetch
     """)
     graph = load_yaml_str(yaml_text)
-    out = PipelineExecutor(graph, mg).run({"observation": "How do we deploy?"})
+    out = PipelineExecutor(graph, mg).run({"observation": seeded_facts[0]})
     text = out["variables"]["value"]
-    assert "Fact 0:" in text or "Fact 1:" in text
+    assert "Fact 0:" in text or "Fact 1:" in text, (
+        f"expected a fact line in: {text!r}"
+    )
     assert isinstance(out["variables"]["ids"], list)
+    assert out["variables"]["ids"], "expected at least one selected id"
 
 
 def test_storage_read_semantic_returns_no_relevant_when_empty(graph_manager, tmp_path):
