@@ -77,6 +77,41 @@ def test_spec_driven_view_renders_saved_yaml(monkeypatch, tmp_path):
     assert plan["role"] == "retrieval"
 
 
+def test_spec_driven_view_rewires_branch_outputs_to_body(monkeypatch, tmp_path):
+    """Edges consuming a Branch's declared output should source from the body
+    node, so the Template/body has a visible outgoing edge in the canvas."""
+    monkeypatch.setenv("PROMPTS_DIR", str(tmp_path))
+    from plugmem.pipelines import spec_storage
+    spec_storage.save_new_version(
+        "g1", PLUGMEM_DEFAULT_RETRIEVE_YAML,
+        validator=load_yaml_str,
+    )
+    v = pipeline_views.view_for_pipeline("spec-driven", graph_id="g1")
+    edges = v["edges"]
+
+    # The Branch's body Template (e.g. render_reasoning_semantic.render)
+    # must have at least one outgoing edge to a downstream consumer
+    # (rendered_sem_proc, which is what reads render_reasoning_semantic.rendered).
+    body_id = "render_reasoning_semantic.render"
+    out_edges = [e for e in edges if e["source"] == body_id]
+    targets = {e["target"] for e in out_edges}
+    assert "rendered_sem_proc" in targets, (
+        f"Template body {body_id!r} has no outgoing edge to its consumer; "
+        f"out_edges={out_edges}"
+    )
+    # And the consumer must NOT also have an incoming edge from the Branch
+    # itself (that'd be the unrewired pre-fix behaviour and would clutter
+    # the canvas with a redundant duplicate).
+    branch_to_sem_proc = [
+        e for e in edges
+        if e["source"] == "render_reasoning_semantic"
+        and e["target"] == "rendered_sem_proc"
+    ]
+    assert branch_to_sem_proc == [], (
+        f"Unrewired edge still present: {branch_to_sem_proc}"
+    )
+
+
 def test_spec_driven_view_invalid_yaml_shows_error(monkeypatch, tmp_path):
     monkeypatch.setenv("PROMPTS_DIR", str(tmp_path))
     # Write an invalid YAML directly into the live file (bypass validator).

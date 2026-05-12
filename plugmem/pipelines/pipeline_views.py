@@ -214,6 +214,22 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
 
     top_level_ids = {n.id for n in graph.nodes}
 
+    # Build a rewire table so consumers of ``<container>.<declared_output>``
+    # see the body node (the actual data source) as the edge source. Without
+    # this, Branch/ForEach bodies look like dead-end leaves on the canvas
+    # — the user can't see where the rendered template/loop output goes.
+    # Mapping shape: {(container_id, output_name): body_display_id}.
+    container_output_map: Dict[tuple, str] = {}
+    for tn in graph.nodes:
+        if tn.body and tn.type in ("Branch", "ForEach"):
+            decls = (tn.config or {}).get("outputs") or {}
+            body_local_ids = {b.id for b in tn.body}
+            for out_name, ref in decls.items():
+                if isinstance(ref, str) and "." in ref:
+                    body_head = ref.split(".", 1)[0]
+                    if body_head in body_local_ids:
+                        container_output_map[(tn.id, out_name)] = f"{tn.id}.{body_head}"
+
     def display_id(local_id: str, parent_id: Optional[str]) -> str:
         return f"{parent_id}.{local_id}" if parent_id else local_id
 
@@ -274,13 +290,24 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
                     continue
                 if not isinstance(ref, str):
                     continue
-                src_head = ref.split(".", 1)[0]
-                src_display = resolve_ref_src(
-                    src_head,
-                    local_ids=local_ids,
-                    parent_id=parent_id,
-                    item_vars=item_vars,
-                )
+                parts = ref.split(".")
+                src_head = parts[0]
+                src_port = parts[1] if len(parts) > 1 else None
+                # Rewire: when a ref reads a container's declared output
+                # (e.g. ``render_reasoning_semantic.rendered``), source
+                # the edge from the body node that actually produces it
+                # (``render_reasoning_semantic.render``) so the canvas
+                # shows the data flowing OUT of the body, not from the
+                # container wrapper.
+                if src_port and (src_head, src_port) in container_output_map:
+                    src_display = container_output_map[(src_head, src_port)]
+                else:
+                    src_display = resolve_ref_src(
+                        src_head,
+                        local_ids=local_ids,
+                        parent_id=parent_id,
+                        item_vars=item_vars,
+                    )
                 if src_display is None:
                     continue
                 edges.append({
@@ -288,7 +315,7 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
                     "kind": "seq", "label": port,
                 })
 
-            # Container → body edges.
+            # Container → body edges (control flow into the body).
             if n.body:
                 edge_kind = "branch" if n.type == "Branch" else "seq"
                 for b in n.body:
@@ -298,6 +325,7 @@ def _yaml_to_spec(graph: PipelineGraph) -> Dict[str, Any]:
                         "kind": edge_kind,
                         "label": "if true" if n.type == "Branch" else "iter",
                     })
+
                 new_item_vars = set(item_vars)
                 if n.type == "ForEach":
                     iv = n.config.get("item_var")
