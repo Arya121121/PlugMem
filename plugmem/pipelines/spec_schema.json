@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plugmem.dev/schemas/spec-driven-pipeline-v1.json",
+  "title": "PlugMem spec-driven pipeline",
+  "description": "Schema for a per-graph YAML pipeline interpreted by plugmem.pipelines.spec_driven. Matches the formal grammar in docs/spec_grammar.md. The reference, top-level structural rules (exactly one Input/Output, DAG, etc.), and ref-resolution rules are enforced by the loader (load_yaml_str); this schema covers the static shape.",
+  "type": "object",
+  "required": ["phase", "nodes"],
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "description": "MVP only accepts retrieve. Other phases delegate to plugmem-default.",
+      "type": "string",
+      "enum": ["retrieve"]
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Node" }
+    }
+  },
+  "$defs": {
+    "Ref": {
+      "description": "Either a node-port reference string ('<node_id>' or '<node_id>.<path>') or a literal { const: <value> }.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["const"],
+          "additionalProperties": false,
+          "properties": { "const": {} }
+        }
+      ]
+    },
+    "PortMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/Ref" }
+    },
+    "OutputsMap": {
+      "description": "Body-output declarations on ForEach/Branch: { <out_name>: '<body_node>.<port>' }.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[^.]+\\..+$"
+      }
+    },
+    "NodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Node": {
+      "oneOf": [
+        { "$ref": "#/$defs/InputNode" },
+        { "$ref": "#/$defs/OutputNode" },
+        { "$ref": "#/$defs/LLMCallNode" },
+        { "$ref": "#/$defs/PromptRenderNode" },
+        { "$ref": "#/$defs/ConstantNode" },
+        { "$ref": "#/$defs/ComputeNode" },
+        { "$ref": "#/$defs/ForEachNode" },
+        { "$ref": "#/$defs/BranchNode" }
+      ]
+    },
+    "InputNode": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "Input" },
+        "config": { "type": "object", "maxProperties": 0 },
+        "inputs": { "type": "object", "maxProperties": 0 }
+      }
+    },
+    "OutputNode": {
+      "type": "object",
+      "required": ["id", "type", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "Output" },
+        "config": { "type": "object", "maxProperties": 0 },
+        "inputs": {
+          "type": "object",
+          "required": ["mode", "reasoning_prompt", "variables"],
+          "additionalProperties": { "$ref": "#/$defs/Ref" }
+        }
+      }
+    },
+    "LLMCallNode": {
+      "description": "Calls the LLM. Exactly one of: config.prompt, inputs.text, inputs.messages. The validator at load time enforces the exclusivity; this schema covers the static shape.",
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "LLMCall" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt": { "type": "string", "minLength": 1 },
+            "role": {
+              "type": "string",
+              "enum": ["default", "structuring", "retrieval", "reasoning", "consolidation"]
+            }
+          }
+        },
+        "inputs": { "$ref": "#/$defs/PortMap" }
+      }
+    },
+    "PromptRenderNode": {
+      "type": "object",
+      "required": ["id", "type", "config"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "PromptRender" },
+        "config": {
+          "type": "object",
+          "required": ["prompt"],
+          "additionalProperties": false,
+          "properties": {
+            "prompt": { "type": "string", "minLength": 1 }
+          }
+        },
+        "inputs": { "$ref": "#/$defs/PortMap" }
+      }
+    },
+    "ConstantNode": {
+      "type": "object",
+      "required": ["id", "type", "config"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "Constant" },
+        "config": {
+          "type": "object",
+          "required": ["value"],
+          "additionalProperties": false,
+          "properties": { "value": {} }
+        },
+        "inputs": { "type": "object", "maxProperties": 0 }
+      }
+    },
+    "ComputeNode": {
+      "type": "object",
+      "required": ["id", "type", "config", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "Compute" },
+        "config": {
+          "type": "object",
+          "required": ["op"],
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "eq", "ne", "lt", "gt", "lte", "gte",
+                "and", "or", "not",
+                "length", "contains", "concat"
+              ]
+            }
+          }
+        },
+        "inputs": { "$ref": "#/$defs/PortMap" }
+      }
+    },
+    "ForEachNode": {
+      "type": "object",
+      "required": ["id", "type", "config", "inputs", "body"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "ForEach" },
+        "config": {
+          "type": "object",
+          "required": ["item_var"],
+          "additionalProperties": false,
+          "properties": {
+            "item_var": { "type": "string", "minLength": 1 },
+            "outputs": { "$ref": "#/$defs/OutputsMap" }
+          }
+        },
+        "inputs": {
+          "type": "object",
+          "required": ["items"],
+          "additionalProperties": { "$ref": "#/$defs/Ref" }
+        },
+        "body": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Node" }
+        }
+      }
+    },
+    "BranchNode": {
+      "type": "object",
+      "required": ["id", "type", "config", "inputs", "body"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "type": { "const": "Branch" },
+        "config": {
+          "type": "object",
+          "required": ["outputs"],
+          "additionalProperties": false,
+          "properties": {
+            "outputs": {
+              "allOf": [
+                { "$ref": "#/$defs/OutputsMap" },
+                { "minProperties": 1 }
+              ]
+            },
+            "else_value": { "$ref": "#/$defs/Ref" }
+          }
+        },
+        "inputs": {
+          "type": "object",
+          "required": ["condition"],
+          "additionalProperties": { "$ref": "#/$defs/Ref" }
+        },
+        "body": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Node" }
+        }
+      }
+    }
+  }
+}

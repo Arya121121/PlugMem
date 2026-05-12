@@ -24,6 +24,7 @@ algorithm itself with a custom pipeline.
 | 6.3 | Loops in spec-driven pipelines (`ForEach` node) | shipped |
 | 6.4 | Branch + Compute nodes in spec-driven pipelines | shipped |
 | 6.5a | Non-destructive YAML versioning + YAML editor UI + version history | shipped |
+| 6.5d | Formal grammar spec doc + JSON Schema | shipped |
 | 6.5b | Interactive xyflow canvas (drag-and-drop palette, port wiring) | future |
 | 6.5c | Python hot-reload for forked pipeline modules | future |
 | 6.6 | Spec-driven coverage of close / insert / consolidate phases | future |
@@ -265,6 +266,22 @@ textarea. Shipped sample:
 
 These remain on the roadmap but were deferred from 6.5a so the
 versioning foundation could ship and be tested first.
+
+## Phase 6.5d — Formal grammar spec + JSON Schema (shipped)
+
+Canonical source-of-truth for the YAML grammar:
+
+- [`docs/spec_grammar.md`](spec_grammar.md) — normative reference.
+  Every loader-enforced rule is listed; every node type, config key,
+  input/output port is documented. Reader-oriented examples stay in
+  [`docs/spec_driven_yaml.md`](spec_driven_yaml.md).
+- [`plugmem/pipelines/spec_schema.json`](../plugmem/pipelines/spec_schema.json)
+  — JSON Schema (draft 2020-12). Mirrors the static shape; the loader
+  still owns rules JSON Schema can't express (cycles, ref resolution,
+  body scoping, mutually-exclusive LLMCall input modes).
+- `tests/test_spec_grammar.py` — drift checks (every loader node type
+  + every Compute op is documented in both the schema enum and the
+  grammar doc; shipped sample validates against both).
 
 ### A. Visual editor
 
