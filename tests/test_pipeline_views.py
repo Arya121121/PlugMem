@@ -59,12 +59,17 @@ def test_spec_driven_view_renders_saved_yaml(monkeypatch, tmp_path):
     )
     v = pipeline_views.view_for_pipeline("spec-driven", graph_id="g1")
     step_ids = {s["id"] for s in v["steps"]}
-    assert {"in", "plan", "mode_pick", "msgs", "out"} <= step_ids
+    assert {"in", "plan", "mode_pick", "out"} <= step_ids
     # The plan step should be an LLM call with prompt=get_plan.
     plan = next(s for s in v["steps"] if s["id"] == "plan")
     assert plan["kind"] == "llm"
     assert plan["prompt_name"] == "get_plan"
     assert plan["role"] == "retrieval"
+    # Both get_plan + get_mode are top-level LLM calls (both always run).
+    mode_pick = next(s for s in v["steps"] if s["id"] == "mode_pick")
+    assert mode_pick["prompt_name"] == "get_mode"
+    # Three reasoning Branches, one per mode.
+    assert {"render_semantic", "render_procedural", "render_episodic"} <= step_ids
 
 
 def test_spec_driven_view_invalid_yaml_shows_error(monkeypatch, tmp_path):
@@ -119,7 +124,7 @@ def test_spec_view_spec_driven_with_yaml(client, monkeypatch, tmp_path):
     r = client.get(f"/api/v1/graphs/{gid}/pipeline/spec_view")
     assert r.status_code == 200
     step_ids = {s["id"] for s in r.json()["steps"]}
-    assert {"in", "plan", "mode_pick", "msgs", "out"} <= step_ids
+    assert {"in", "plan", "mode_pick", "render_semantic", "out"} <= step_ids
 
 
 def test_samples_endpoint_lists_default(client):
@@ -133,7 +138,9 @@ def test_sample_yaml_validates(client):
     """The shipped starter YAML must parse cleanly through the loader."""
     g = load_yaml_str(PLUGMEM_DEFAULT_RETRIEVE_YAML)
     assert g.phase == "retrieve"
-    assert {n.id for n in g.nodes} >= {"in", "plan", "mode_pick", "msgs", "out"}
+    top_level = {n.id for n in g.nodes}
+    assert {"in", "plan", "mode_pick", "render_semantic",
+            "render_procedural", "render_episodic", "out"} <= top_level
 
 
 def test_sample_yaml_runs_end_to_end(client, monkeypatch, tmp_path):

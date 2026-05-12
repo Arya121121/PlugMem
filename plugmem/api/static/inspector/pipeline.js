@@ -9,17 +9,22 @@
 
 import { api } from "./api.js";
 
-const PHASE_GAP = 120;            // px between phase columns
-const STAGE_OFFSET_Y = 120;       // stage trigger sits above the phase entry
-const NODE_DIMS = {               // [width, height] used by dagre — actual
-  llm:               [280, 200],  // rendered height is css-controlled
-  template_render:   [280, 160],
-  embed:             [240, 100],
-  compute:           [240, 100],
-  storage:           [240, 100],
-  branch:            [300, 130],
-  loop_marker:       [220, 80],
+const PHASE_GAP = 160;            // px between phase columns
+const STAGE_OFFSET_Y = 160;       // stage trigger sits above the phase entry
+// First-pass dagre dims (width, height). Actual rendered height is
+// dynamic — `mountReactApp` re-measures each node after first render and
+// re-runs dagre so edges never have to clip through node bodies.
+const NODE_DIMS = {
+  llm:               [280, 300],
+  template_render:   [280, 240],
+  embed:             [240, 110],
+  compute:           [240, 110],
+  storage:           [240, 110],
+  branch:            [300, 180],
+  loop_marker:       [240, 110],
 };
+const LAYOUT_NODESEP = 60;
+const LAYOUT_RANKSEP = 110;
 
 const PER_LABELS = {
   per_step: "per step",
@@ -655,16 +660,50 @@ export function mountPipeline({ container, getGraphId, toast }) {
       stage: StageNode,
     };
 
-    const { nodes, edges } = buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName, statsByName);
+    const initial = buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName, statsByName);
 
     function App() {
+      const [graphState, setGraphState] = React.useState(initial);
       const onNodeClick = useCallback((_, node) => {
         if (node.data?.step) selectStep(node.data.step);
       }, []);
 
+      // Post-mount remeasure: after react-flow renders the cards once
+      // with our first-pass dims, walk the DOM to read each card's
+      // *actual* height, then re-run dagre with those exact heights so
+      // edges never have to slice through node bodies.
+      React.useEffect(() => {
+        let cancelled = false;
+        const raf = requestAnimationFrame(() => {
+          if (cancelled) return;
+          const dimsOverride = {};
+          const root = els.canvas;
+          if (!root) return;
+          for (const n of initial.nodes) {
+            if (n.type === "stage") continue;
+            const el = root.querySelector(
+              `.react-flow__node[data-id="${CSS.escape(n.id)}"]`,
+            );
+            if (!el) continue;
+            const inner = el.firstElementChild || el;
+            const w = inner.offsetWidth || el.offsetWidth;
+            const h = inner.offsetHeight || el.offsetHeight;
+            if (w && h) dimsOverride[n.id] = { width: w, height: h };
+          }
+          if (Object.keys(dimsOverride).length === 0) return;
+          const relaid = buildGraph(
+            spec, dagre, MarkerType, visibleKinds,
+            promptInfoByName, statsByName, dimsOverride,
+          );
+          if (!cancelled) setGraphState(relaid);
+        });
+        return () => { cancelled = true; cancelAnimationFrame(raf); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+
       return e(ReactFlow, {
-        nodes,
-        edges,
+        nodes: graphState.nodes,
+        edges: graphState.edges,
         nodeTypes,
         onNodeClick,
         nodesDraggable: false,
@@ -672,7 +711,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         edgesFocusable: false,
         elementsSelectable: true,
         fitView: true,
-        fitViewOptions: { padding: 0.1 },
+        fitViewOptions: { padding: 0.15 },
         minZoom: 0.15,
         maxZoom: 1.5,
         defaultEdgeOptions: { animated: false },
@@ -1472,7 +1511,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
 }
 
 
-function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName, statsByName) {
+function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName, statsByName, dimsOverride = null) {
   const kinds = visibleKinds || new Set(ALL_KINDS);
   // Filter + contract: build effective steps + edges from the visible-kinds set.
   const { steps: effectiveSteps, edges: effectiveEdges } = contractGraph(
@@ -1497,12 +1536,22 @@ function buildGraph(spec, dagre, MarkerType, visibleKinds, promptByName, statsBy
     );
 
     const g = new dagre.graphlib.Graph();
-    g.setGraph({ rankdir: "TB", nodesep: 36, ranksep: 56, marginx: 12, marginy: 12 });
+    g.setGraph({
+      rankdir: "TB",
+      nodesep: LAYOUT_NODESEP,
+      ranksep: LAYOUT_RANKSEP,
+      marginx: 24,
+      marginy: 24,
+    });
     g.setDefaultEdgeLabel(() => ({}));
 
     for (const s of phaseSteps) {
-      const dims = NODE_DIMS[s.kind] || NODE_DIMS.compute;
-      g.setNode(s.id, { width: dims[0], height: dims[1] });
+      const baseDims = NODE_DIMS[s.kind] || NODE_DIMS.compute;
+      const override = dimsOverride && dimsOverride[s.id];
+      g.setNode(s.id, {
+        width: override?.width || baseDims[0],
+        height: override?.height || baseDims[1],
+      });
     }
     for (const ed of layoutEdges) {
       g.setEdge(ed.source, ed.target);
@@ -1699,11 +1748,15 @@ function makeEdge(ed, MarkerType, { ghost = false } = {}) {
   }
   style.stroke = stroke;
 
+  // Bezier ("default") edges curve around nodes much more cleanly than
+  // smoothstep when the dagre layout is tight. Loop-back edges stay
+  // smoothstep so they bend back at right angles, which reads better
+  // as a "return to top of loop" cue.
   return {
     id: `${ed.source}->${ed.target}:${ed.kind}`,
     source: ed.source,
     target: ed.target,
-    type: ed.kind === "loop_back" ? "smoothstep" : "smoothstep",
+    type: ed.kind === "loop_back" ? "smoothstep" : "default",
     label: ed.label || undefined,
     style,
     labelStyle,
