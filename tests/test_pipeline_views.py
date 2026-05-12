@@ -149,7 +149,13 @@ def test_sample_yaml_validates(client):
             "retrieve_semantic_nodes", "retrieve_procedural_nodes",
             "retrieve_episodic_nodes",
             "render_reasoning_semantic", "render_reasoning_procedural",
-            "render_reasoning_episodic", "out"} <= top_level
+            "render_reasoning_episodic",
+            "reason_llm_call", "out"} <= top_level
+    # reason_llm_call is in messages mode (no config.prompt).
+    reason = next(n for n in g.nodes if n.id == "reason_llm_call")
+    assert reason.type == "LLMCall"
+    assert "prompt" not in (reason.config or {}) or not reason.config.get("prompt")
+    assert "messages" in reason.inputs
 
 
 def test_sample_yaml_runs_end_to_end(client, monkeypatch, tmp_path):

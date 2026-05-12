@@ -931,3 +931,113 @@ def test_compute_branch_end_to_end_via_route(client, monkeypatch, tmp_path, fake
     assert r.status_code == 200, r.text
     # Condition is truthy → probe LLMCall ran exactly once.
     assert len(fake_llm.calls) - n_before == 1
+
+
+# ----------------------------------------------------------------------- #
+# LLMCall messages-mode (Phase 6.5a follow-up)
+# ----------------------------------------------------------------------- #
+
+
+def test_llmcall_messages_mode_skips_render(graph_manager, tmp_path, fake_llm):
+    """An LLMCall with inputs.messages (no config.prompt) calls LLM directly."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: msgs
+            type: PromptRender
+            config: { prompt: reasoning_semantic }
+            inputs:
+              semantic_memory: { const: "fact 1" }
+              time: { const: "" }
+              observation: in.observation
+          - id: reason
+            type: LLMCall
+            config: { role: reasoning }
+            inputs:
+              messages: msgs.messages
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: msgs.messages
+              variables: reason.parsed
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-msgs")
+    mg = graph_manager.get_graph("g-msgs")
+    n_before = len(fake_llm.calls)
+    out = PipelineExecutor(graph, mg).run({"observation": "hello"})
+    # One LLM call happened; the messages it received came from the
+    # PromptRender (NOT re-rendered inside LLMCall).
+    assert len(fake_llm.calls) - n_before == 1
+    sent = fake_llm.calls[-1]
+    assert isinstance(sent, list) and len(sent) >= 1
+    # variables in the output is the LLMCall's parsed dict.
+    assert "text" in out["variables"]
+
+
+def test_llmcall_rejects_both_prompt_and_messages(graph_manager, tmp_path):
+    """Setting BOTH config.prompt AND inputs.messages is ambiguous → ValueError."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: msgs
+            type: PromptRender
+            config: { prompt: reasoning_semantic }
+            inputs:
+              semantic_memory: { const: "" }
+              time: { const: "" }
+              observation: in.observation
+          - id: bad
+            type: LLMCall
+            config: { prompt: get_plan, role: retrieval }
+            inputs:
+              messages: msgs.messages
+              goal: { const: "" }
+              subgoal: { const: "" }
+              state: { const: "" }
+              observation: in.observation
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-bad")
+    mg = graph_manager.get_graph("g-bad")
+    with pytest.raises(ValueError, match="EITHER config.prompt OR"):
+        PipelineExecutor(graph, mg).run({"observation": "?"})
+
+
+def test_llmcall_rejects_neither_prompt_nor_messages(graph_manager, tmp_path):
+    """An LLMCall with no prompt and no messages input → ValueError."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: bad
+            type: LLMCall
+            config: { role: reasoning }
+            inputs: {}
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    graph = load_yaml_str(yaml_text)
+    graph_manager.create_graph("g-empty")
+    mg = graph_manager.get_graph("g-empty")
+    with pytest.raises(ValueError, match="must set either config.prompt"):
+        PipelineExecutor(graph, mg).run({"observation": "?"})

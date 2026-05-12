@@ -691,6 +691,20 @@ class PipelineExecutor:
         return {"messages": messages}
 
     def _call_llm(self, node: NodeSpec, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Call the LLM.
+
+        Two modes:
+        - **Prompt-driven** (the original): ``config.prompt`` names a
+          registered prompt; ``inputs`` are the template variables. The
+          executor renders the messages internally, then calls the LLM.
+        - **Messages-driven**: ``inputs.messages`` is a pre-rendered
+          messages list (typically piped from an upstream ``PromptRender``
+          node). The executor skips rendering and calls the LLM directly.
+          This is what makes ``Template → LLM → Output`` chains
+          expressible — see ``sample_specs.py``.
+
+        Exactly one of the two modes must be configured per node.
+        """
         if self.llm_call_count >= LLM_CALL_CAP:
             raise ValueError(
                 f"LLM call cap ({LLM_CALL_CAP}) exceeded for pipeline "
@@ -699,16 +713,36 @@ class PipelineExecutor:
         self.llm_call_count += 1
         prompt_name = node.config.get("prompt")
         role = node.config.get("role", "default")
-        if not prompt_name:
-            raise ValueError(f"LLMCall {node.id!r}: config.prompt required")
+        explicit_messages = inputs.get("messages")
+        has_messages_input = "messages" in node.inputs
+        if prompt_name and has_messages_input:
+            raise ValueError(
+                f"LLMCall {node.id!r}: set EITHER config.prompt OR "
+                f"inputs.messages, not both"
+            )
+        if not prompt_name and not has_messages_input:
+            raise ValueError(
+                f"LLMCall {node.id!r}: must set either config.prompt "
+                f"(prompt-driven) or inputs.messages (messages-driven)"
+            )
+
         llm = self.memory_graph._router.for_role(role)
-        messages = self._registry().render_messages(
-            prompt_name, inputs, graph_id=self.memory_graph.graph_id,
-        )
+        if has_messages_input:
+            if not isinstance(explicit_messages, list):
+                raise ValueError(
+                    f"LLMCall {node.id!r}: inputs.messages must be a list, "
+                    f"got {type(explicit_messages).__name__}"
+                )
+            messages = explicit_messages
+        else:
+            messages = self._registry().render_messages(
+                prompt_name, inputs, graph_id=self.memory_graph.graph_id,
+            )
+
         started = _time.monotonic()
         response = llm.complete(messages=messages)
         latency_ms = int((_time.monotonic() - started) * 1000)
-        parser = PARSERS.get(prompt_name)
+        parser = PARSERS.get(prompt_name) if prompt_name else None
         parsed = parser(response) if parser else {"text": response}
         record_llm_step(
             name=self._trace_step_name(node.id),

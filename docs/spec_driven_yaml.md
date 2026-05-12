@@ -108,8 +108,10 @@ variables          # dict (free-form trace metadata)
 
 ### `LLMCall`
 
-Calls a registered prompt through the LLM router; recorded into the
-trace recorder under the **node's id**, not the prompt's name.
+Calls the LLM. Two modes:
+
+**Prompt-driven** — name a registered prompt; the executor renders the
+messages from your inputs as template variables, then calls the LLM:
 
 ```yaml
 - id: plan
@@ -120,12 +122,28 @@ trace recorder under the **node's id**, not the prompt's name.
   inputs: { ... }         # template variables (must match what the prompt expects)
 ```
 
-Outputs:
+**Messages-driven** — feed a pre-rendered messages list directly. The
+executor skips rendering and calls the LLM with those messages. This is
+how `Template → LLM → Output` chains are expressed (the templating
+happens in a `PromptRender` upstream):
+
+```yaml
+- id: reason
+  type: LLMCall
+  config: { role: reasoning }  # no `prompt` key — that's the cue
+  inputs:
+    messages: msgs.messages    # ref to a list[{role, content}] port
+```
+
+Exactly one of the two modes must be configured. Setting both `config.prompt`
+**and** `inputs.messages` is a load-time error.
+
+Outputs (same in both modes):
 
 | Port | Type | Meaning |
 |---|---|---|
 | `raw` | str | The full LLM response. |
-| `parsed.<key>` | varies | Best-effort structured output. Currently parsed: `get_plan` → `{next_subgoal, query_tags}`, `get_mode` → `{mode}`. Other prompts: `parsed.text` = the raw response. |
+| `parsed.<key>` | varies | Best-effort structured output. Currently parsed: `get_plan` → `{next_subgoal, query_tags}`, `get_mode` → `{mode}`. Other prompts (and all messages-mode calls): `parsed.text` = the raw response. |
 
 There is a hard cap of **20 LLM calls per pipeline run** (config knob will
 follow if anyone hits it).

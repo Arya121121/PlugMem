@@ -8,12 +8,10 @@ from __future__ import annotations
 
 
 # ----------------------------------------------------------------------- #
-# plugmem-default — retrieve phase, expressed in the spec-driven YAML
+# plugmem-default — retrieve+reason flow, expressed in spec-driven YAML
 # ----------------------------------------------------------------------- #
 #
-# Top-level node IDs intentionally mirror the IDs used by
-# ``plugmem.core.pipeline_spec.STEPS`` for the retrieve phase, so the
-# spec-driven canvas reads as a near-1-to-1 copy of plugmem-default:
+# Top-level node IDs intentionally mirror ``plugmem.core.pipeline_spec``:
 #
 #   get_plan                           (LLMCall)
 #   get_mode                           (LLMCall)
@@ -23,33 +21,39 @@ from __future__ import annotations
 #   render_reasoning_semantic          (Branch wrapping PromptRender)
 #   render_reasoning_procedural        (Branch wrapping PromptRender)
 #   render_reasoning_episodic          (Branch wrapping PromptRender)
+#   reason_llm_call                    (LLMCall consuming the rendered messages)
 #
-# The MVP YAML grammar has no ``StorageRead`` / ``Embed`` node; the
-# ``retrieve_*_nodes`` steps are Compute(concat) stubs that surface
-# what data WOULD be fetched in production (query_tags + observation,
-# next_subgoal, observation). Real fetches land in Phase 6.6.
+# Each ``render_reasoning_*`` body uses a ``PromptRender`` to build the
+# messages for that mode. The branches collapse to a single messages
+# list via two ``Compute(concat)`` nodes. The final ``reason_llm_call``
+# is an LLMCall in **messages mode** — ``inputs.messages`` is wired to
+# the merged messages, so the LLM sees exactly the rendered prompt and
+# returns a response that flows into the Output's ``variables``.
+#
+# The MVP grammar has no StorageRead / Embed node; the
+# ``retrieve_*_nodes`` steps are Compute(concat) stubs whose inputs
+# surface what data WOULD be fetched in production. Real fetches land
+# in Phase 6.6.
 PLUGMEM_DEFAULT_RETRIEVE_YAML = """\
-# plugmem-default retrieve, expressed as a spec-driven pipeline.
-#
-# Mirrors MemoryGraph.retrieve_memory() — same IDs as
-# plugmem.core.pipeline_spec.STEPS for the retrieve phase.
+# plugmem-default retrieve + reasoning, expressed as a spec-driven pipeline.
 #
 # Flow:
-#   get_plan + get_mode (both always run, in parallel by data deps)
-#     → retrieve_semantic_nodes  (uses plan.parsed.query_tags + observation)
-#     → retrieve_procedural_nodes (uses plan.parsed.next_subgoal)
-#     → retrieve_episodic_nodes  (uses observation)
-#   → ONE of three reasoning_* templates renders, gated by get_mode.parsed.mode
-#   → Output ships {mode, reasoning_prompt, variables}
+#   get_plan + get_mode (both always run, parallel by data deps)
+#     → retrieve_*_nodes (stubs — would hit storage in production)
+#     → ONE of three reasoning_* templates renders, gated by mode
+#     → reason_llm_call consumes the rendered messages and produces an answer
+#     → Output ships {mode, reasoning_prompt: <messages>, variables: <answer>}
 #
-# Storage fetches are Compute(concat) stubs in this MVP — the YAML
-# grammar has no StorageRead/Embed nodes yet (Phase 6.6).
+# The reason_llm_call uses LLMCall's "messages mode": inputs.messages
+# is wired to the merged rendered messages, so the LLM call is an
+# explicit step in the graph rather than hidden inside the template
+# render. Storage fetches are Compute(concat) stubs (Phase 6.6).
 phase: retrieve
 
 nodes:
   - { id: in, type: Input }
 
-  # --- get_plan (LLM, always runs) ---
+  # --- Planning + mode classification (both always run) ---
   - id: get_plan
     type: LLMCall
     config: { prompt: get_plan, role: retrieval }
@@ -59,7 +63,6 @@ nodes:
       state: in.state
       observation: in.observation
 
-  # --- get_mode (LLM, always runs in this MVP version) ---
   - id: get_mode
     type: LLMCall
     config: { prompt: get_mode, role: retrieval }
@@ -67,11 +70,7 @@ nodes:
       observation: in.observation
       task_type: in.task_type
 
-  # --- retrieve_*_nodes — STUBBED via Compute(concat). In real plugmem
-  #     these hit ChromaDB through retrieve_semantic_nodes /
-  #     retrieve_procedural_nodes / retrieve_episodic_nodes. The MVP
-  #     grammar has no StorageRead/Embed node; output is a plausible
-  #     string so the rendered prompt is honest. ---
+  # --- Memory fetch — STUBBED via Compute(concat) ---
   - id: retrieve_semantic_nodes
     type: Compute
     config: { op: concat }
@@ -93,9 +92,7 @@ nodes:
       a: { const: "Episode 0 (stub — would be retrieved via observation=" }
       b: in.observation
 
-  # --- 3-way switch by mode: Compute(eq) gate + Branch for each template.
-  #     Each Branch's else_value is an empty list, so only the active
-  #     branch contributes to the final messages list. ---
+  # --- Mode gates: each Compute(eq) feeds a Branch's condition. ---
   - id: is_semantic
     type: Compute
     config: { op: eq }
@@ -117,6 +114,7 @@ nodes:
       a: get_mode.parsed.mode
       b: { const: episodic_memory }
 
+  # --- Template rendering, one per mode. Body emits `messages`. ---
   - id: render_reasoning_semantic
     type: Branch
     inputs: { condition: is_semantic.value }
@@ -161,8 +159,7 @@ nodes:
           time: in.time
           question: in.observation
 
-  # Collapse the three optional branches into one messages list
-  # (two will be empty, one will hold the rendered template's messages).
+  # --- Collapse the three optional branches into one messages list. ---
   - id: messages_sem_proc
     type: Compute
     config: { op: concat }
@@ -177,27 +174,36 @@ nodes:
       a: messages_sem_proc.value
       b: render_reasoning_episodic.messages
 
-  # --- Phase exit ---
+  # --- The reasoning LLM call: takes the rendered messages directly.
+  #     Mirrors plugmem-default's reason_llm_call step. No `config.prompt`
+  #     because we want to use the messages built above verbatim. ---
+  - id: reason_llm_call
+    type: LLMCall
+    config: { role: reasoning }
+    inputs:
+      messages: messages_all.value
+
+  # --- Phase exit. reasoning_prompt = the messages /reason would consume.
+  #     variables.text = the LLM's answer (via the LLMCall's parsed dict). ---
   - id: out
     type: Output
     inputs:
       mode: get_mode.parsed.mode
       reasoning_prompt: messages_all.value
-      variables:
-        const:
-          source: "spec-driven plugmem-default sample"
+      variables: reason_llm_call.parsed
 """
 
 
 SAMPLES = {
     "plugmem-default": {
-        "label": "plugmem-default retrieve",
+        "label": "plugmem-default retrieve + reasoning",
         "description": (
-            "Mirrors PlugMemDefaultPipeline.retrieve, with top-level node "
-            "IDs matching plugmem.core.pipeline_spec.STEPS for the retrieve "
-            "phase. get_plan + get_mode both run; one of three "
-            "reasoning_* templates renders by mode. Memory fetches are "
-            "stubbed via Compute(concat) (StorageRead lands in Phase 6.6)."
+            "Mirrors PlugMemDefaultPipeline.retrieve + reasoning. "
+            "get_plan + get_mode both run, then one of three reasoning_* "
+            "templates renders by mode, and reason_llm_call consumes the "
+            "rendered messages — so the canvas shows the full "
+            "Template → LLM → Output arc. Memory fetches are stubbed via "
+            "Compute(concat) (StorageRead lands in Phase 6.6)."
         ),
         "content": PLUGMEM_DEFAULT_RETRIEVE_YAML,
     },
