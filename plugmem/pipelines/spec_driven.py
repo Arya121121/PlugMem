@@ -55,6 +55,11 @@ NODE_TYPES = {
     "ForEach", "Branch", "Compute", "StorageRead", "Embed",
 }
 STORAGE_COLLECTIONS = {"semantic", "procedural", "episodic"}
+# Phases the loader accepts in either ``phase: <name>`` (single-phase)
+# or ``phases: {<name>: ...}`` (multi-phase) form. Adding to this set is
+# how new phases enter the grammar; the executor only RUNS phases that
+# SpecDrivenPipeline routes to (currently retrieve + reason).
+ALLOWED_PHASES = {"retrieve", "reason", "consolidate"}
 BODY_FORBIDDEN_TYPES = {"Input", "Output"}
 
 
@@ -77,19 +82,32 @@ def _op_contains(i): return {"value": i["item"] in i["list"]}
 def _op_concat(i):   return {"value": i["a"] + i["b"]}
 
 
+def _op_similarity(i):
+    """Cosine similarity between two embedding vectors.
+
+    Pairs naturally with the ``Embed`` node — both inputs should be
+    ``list[float]`` (or any iterable of floats). Delegates to
+    ``plugmem.clients.embedding.get_similarity`` so behaviour matches
+    what ``MemoryGraph.retrieve_*_nodes`` uses internally.
+    """
+    from plugmem.clients.embedding import get_similarity
+    return {"value": float(get_similarity(i["a"], i["b"]))}
+
+
 COMPUTE_OPS: Dict[str, Dict[str, Any]] = {
-    "eq":       {"fn": _op_eq,       "inputs": ["a", "b"]},
-    "ne":       {"fn": _op_ne,       "inputs": ["a", "b"]},
-    "lt":       {"fn": _op_lt,       "inputs": ["a", "b"]},
-    "gt":       {"fn": _op_gt,       "inputs": ["a", "b"]},
-    "lte":      {"fn": _op_lte,      "inputs": ["a", "b"]},
-    "gte":      {"fn": _op_gte,      "inputs": ["a", "b"]},
-    "and":      {"fn": _op_and,      "inputs": ["a", "b"]},
-    "or":       {"fn": _op_or,       "inputs": ["a", "b"]},
-    "not":      {"fn": _op_not,      "inputs": ["a"]},
-    "length":   {"fn": _op_length,   "inputs": ["list"]},
-    "contains": {"fn": _op_contains, "inputs": ["list", "item"]},
-    "concat":   {"fn": _op_concat,   "inputs": ["a", "b"]},
+    "eq":         {"fn": _op_eq,         "inputs": ["a", "b"]},
+    "ne":         {"fn": _op_ne,         "inputs": ["a", "b"]},
+    "lt":         {"fn": _op_lt,         "inputs": ["a", "b"]},
+    "gt":         {"fn": _op_gt,         "inputs": ["a", "b"]},
+    "lte":        {"fn": _op_lte,        "inputs": ["a", "b"]},
+    "gte":        {"fn": _op_gte,        "inputs": ["a", "b"]},
+    "and":        {"fn": _op_and,        "inputs": ["a", "b"]},
+    "or":         {"fn": _op_or,         "inputs": ["a", "b"]},
+    "not":        {"fn": _op_not,        "inputs": ["a"]},
+    "length":     {"fn": _op_length,     "inputs": ["list"]},
+    "contains":   {"fn": _op_contains,   "inputs": ["list", "item"]},
+    "concat":     {"fn": _op_concat,     "inputs": ["a", "b"]},
+    "similarity": {"fn": _op_similarity, "inputs": ["a", "b"]},
 }
 
 
@@ -163,57 +181,124 @@ def _resolve_ref(
 
 
 def load_yaml(path: Path) -> PipelineGraph:
-    """Parse + validate a pipeline YAML. Raises ValueError on bad spec."""
+    """Parse + validate a pipeline YAML. Returns the **retrieve** phase
+    for backward compatibility — callers wanting another phase should
+    use :func:`load_yaml_str_multi` instead."""
     return load_yaml_str(path.read_text(), source=str(path))
 
 
 def load_yaml_str(text: str, *, source: str = "<inline>") -> PipelineGraph:
-    """Same as :func:`load_yaml` but takes the YAML source as a string."""
+    """Parse + validate a pipeline YAML string. Returns the **retrieve**
+    phase's :class:`PipelineGraph`. Accepts both single-phase and
+    multi-phase formats; multi-phase YAMLs MUST define a ``retrieve``
+    phase or this raises."""
+    phases = load_yaml_str_multi(text, source=source)
+    if "retrieve" not in phases:
+        raise ValueError(
+            f"YAML in {source} has no retrieve phase. Phases present: "
+            f"{sorted(phases)}"
+        )
+    return phases["retrieve"]
+
+
+def load_yaml_str_multi(
+    text: str, *, source: str = "<inline>",
+) -> Dict[str, "PipelineGraph"]:
+    """Parse + validate a pipeline YAML string. Returns a dict mapping
+    each defined phase name to its :class:`PipelineGraph`.
+
+    Two formats are accepted:
+
+    - **Single-phase** (the original): ``phase: <name>`` + top-level
+      ``nodes: [...]``. Returns ``{<name>: PipelineGraph}``.
+    - **Multi-phase**: ``phases: {<name>: {nodes: [...]}, ...}``.
+      Each phase is parsed independently; their node-id namespaces are
+      independent.
+
+    Allowed phase names: :data:`ALLOWED_PHASES`.
+    """
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise ValueError(f"YAML parse error in {source}: {e}") from e
     if not isinstance(raw, dict):
         raise ValueError(f"YAML must be a top-level dict: {source}")
-    phase = raw.get("phase", "retrieve")
-    if phase != "retrieve":
+
+    if "phases" in raw and ("phase" in raw or "nodes" in raw):
         raise ValueError(
-            f"MVP only supports phase=retrieve, got {phase!r}. "
-            f"Other phases delegate to plugmem-default."
+            f"YAML in {source}: use either the single-phase form "
+            f"(phase + nodes) OR the multi-phase form (phases: {{...}}), "
+            f"not both."
         )
-    raw_nodes = raw.get("nodes")
+
+    if "phases" in raw:
+        phases_block = raw["phases"]
+        if not isinstance(phases_block, dict) or not phases_block:
+            raise ValueError(
+                f"YAML in {source}: 'phases' must be a non-empty mapping"
+            )
+        result: Dict[str, "PipelineGraph"] = {}
+        for phase_name, phase_body in phases_block.items():
+            if not isinstance(phase_body, dict):
+                raise ValueError(
+                    f"YAML in {source}: phase {phase_name!r} must be a mapping"
+                )
+            result[phase_name] = _parse_phase(
+                phase_name, phase_body, context=f"phases.{phase_name}",
+            )
+        return result
+
+    # Single-phase form (backward compat). Use ``top-level`` as the
+    # context label so existing user-facing error messages stay stable.
+    phase = raw.get("phase", "retrieve")
+    body = {k: raw[k] for k in ("nodes",) if k in raw}
+    return {phase: _parse_phase(phase, body, context="top-level")}
+
+
+def _parse_phase(
+    phase_name: str, body: Dict[str, Any], *, context: str,
+) -> "PipelineGraph":
+    """Parse + validate a single phase's body. Shared by both file formats.
+
+    ``context`` is the label that prefixes every error message (e.g.
+    ``"top-level"`` for single-phase YAMLs or ``"phases.retrieve"`` for
+    multi-phase). Keeping it stable matters: the
+    ``test_tutorial_quotes_exact_validator_error`` test pins the
+    tutorial doc against the loader's real output.
+    """
+    if phase_name not in ALLOWED_PHASES:
+        raise ValueError(
+            f"{context}: unsupported phase {phase_name!r}. Allowed: "
+            f"{sorted(ALLOWED_PHASES)}"
+        )
+    raw_nodes = body.get("nodes")
     if not isinstance(raw_nodes, list):
-        raise ValueError("'nodes' must be a list")
+        raise ValueError(f"{context}: 'nodes' must be a list")
 
-    nodes = [_parse_node(entry, context="top-level") for entry in raw_nodes]
+    nodes = [_parse_node(entry, context=context) for entry in raw_nodes]
 
-    # Top-level structural constraints.
     seen: set = set()
     for n in nodes:
         if n.id in seen:
-            raise ValueError(f"Duplicate node id: {n.id!r}")
+            raise ValueError(f"{context}: Duplicate node id: {n.id!r}")
         seen.add(n.id)
     type_counts: Dict[str, int] = {}
     for n in nodes:
         type_counts[n.type] = type_counts.get(n.type, 0) + 1
     if type_counts.get("Input", 0) != 1:
-        raise ValueError("Exactly one Input node is required")
+        raise ValueError(f"{context}: Exactly one Input node is required")
     if type_counts.get("Output", 0) != 1:
-        raise ValueError("Exactly one Output node is required")
+        raise ValueError(f"{context}: Exactly one Output node is required")
 
-    # Validate references (and recursively for ForEach bodies). Cycle
-    # detection happens via the topo sort below.
-    _validate_refs(nodes, allowed_ids=seen, item_vars=set(), context="top-level")
+    _validate_refs(nodes, allowed_ids=seen, item_vars=set(), context=context)
     _topo_sort(nodes)
-
-    # Recurse into ForEach / Branch bodies to validate refs + cycles.
     for n in nodes:
         if n.type == "ForEach":
             _validate_foreach(n, outer_ids=seen)
         elif n.type == "Branch":
             _validate_branch(n, outer_ids=seen)
 
-    return PipelineGraph(phase=phase, nodes=nodes)
+    return PipelineGraph(phase=phase_name, nodes=nodes)
 
 
 def _parse_node(entry: Any, *, context: str) -> NodeSpec:
@@ -940,16 +1025,16 @@ class SpecDrivenPipeline(MemoryPipeline):
     def __init__(self) -> None:
         self._default = PlugMemDefaultPipeline()
 
-    # ---- retrieve runs the executor ----
+    # ---- retrieve runs the executor on the retrieve phase ----
     def retrieve(self, graph: MemoryGraph, body: RetrieveRequest) -> RetrieveResponse:
-        out = self._run_for_graph(graph, self._body_to_inputs(body))
+        out = self._run_phase(graph, "retrieve", self._body_to_inputs(body))
         return RetrieveResponse(
             mode=out.get("mode") or "semantic_memory",
             reasoning_prompt=out.get("reasoning_prompt") or [],
             variables=out.get("variables") or {},
         )
 
-    # ---- reason reuses the retrieve YAML, reshapes the output ----
+    # ---- reason: dedicated reason phase if present, else retrieve+reshape ----
     def reason(self, graph: MemoryGraph, body) -> ReasonResponse:
         retrieve_body = RetrieveRequest(
             observation=body.observation or "",
@@ -957,10 +1042,14 @@ class SpecDrivenPipeline(MemoryPipeline):
             task_type=body.task_type, time=body.time, mode=body.mode,
             session_id=getattr(body, "session_id", None),
         )
-        out = self._run_for_graph(graph, self._body_to_inputs(retrieve_body))
+        phases = self._load_phases(graph.graph_id)
+        phase_to_run = "reason" if "reason" in phases else "retrieve"
+        out = PipelineExecutor(phases[phase_to_run], graph).run(
+            self._body_to_inputs(retrieve_body),
+        )
         # `variables` is whatever the YAML's Output node assigned. The
         # convention from the shipped sample is that the reasoning
-        # LLMCall's `parsed` dict ({"text": response}) lands there.
+        # LLMCall's parsed dict ({"text": response}) lands there.
         variables = out.get("variables") or {}
         reasoning = ""
         if isinstance(variables, dict):
@@ -975,7 +1064,7 @@ class SpecDrivenPipeline(MemoryPipeline):
             reasoning_prompt=out.get("reasoning_prompt") or [],
         )
 
-    # ---- other phases delegate ----
+    # ---- other phases delegate (logic-level support lands in Phase 6.6b-3) ----
     def ingest(self, graph, body):
         return self._default.ingest(graph, body)
 
@@ -983,11 +1072,26 @@ class SpecDrivenPipeline(MemoryPipeline):
         return self._default.consolidate(graph, body)
 
     # ---- shared execution path ----
-    def _run_for_graph(
-        self, graph: MemoryGraph, phase_inputs: Dict[str, Any],
+    def _run_phase(
+        self, graph: MemoryGraph, phase_name: str,
+        phase_inputs: Dict[str, Any],
     ) -> Dict[str, Any]:
-        spec = self._load_for_graph(graph.graph_id)
-        return PipelineExecutor(spec, graph).run(phase_inputs)
+        phases = self._load_phases(graph.graph_id)
+        if phase_name not in phases:
+            raise ValueError(
+                f"Pipeline YAML for graph {graph.graph_id!r} has no "
+                f"{phase_name!r} phase. Present: {sorted(phases)}."
+            )
+        return PipelineExecutor(phases[phase_name], graph).run(phase_inputs)
+
+    def _load_phases(self, graph_id: str) -> Dict[str, PipelineGraph]:
+        path = self.yaml_path_for(graph_id)
+        if not path.exists():
+            raise ValueError(
+                f"No pipeline YAML for graph {graph_id!r} at {path}. "
+                f"Write one or switch the pipeline binding back to plugmem-default."
+            )
+        return load_yaml_str_multi(path.read_text(), source=str(path))
 
     # ---- helpers ----
     @staticmethod

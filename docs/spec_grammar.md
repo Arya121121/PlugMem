@@ -14,10 +14,25 @@ grammar changes, update this file in the same PR.
 
 ## 1. Top-level structure (EBNF-ish)
 
+Two file formats are accepted. **Single-phase** (the original):
+
 ```ebnf
 Document   = "phase:" Phase  "nodes:" NodeList
+```
 
-Phase      = "retrieve"                   (* MVP — other phases delegate *)
+**Multi-phase**:
+
+```ebnf
+Document   = "phases:" "{" Phase ":" PhaseBody ("," Phase ":" PhaseBody)* "}"
+PhaseBody  = "nodes:" NodeList
+```
+
+Setting both `phase`/`nodes` AND `phases` in the same document is a
+load-time error. In the multi-phase form, each phase has its own
+independent node-id namespace.
+
+```ebnf
+Phase      = "retrieve" | "reason" | "consolidate"
 
 NodeList   = "[" Node ("," Node)* "]"
 
@@ -221,6 +236,7 @@ load time.
 | `length` | `list` | `int` | `len(list)` |
 | `contains` | `list`, `item` | `bool` | `item in list` |
 | `concat` | `a`, `b` | `str` or `list` | `a + b` (strings or lists; identical-type required at runtime) |
+| `similarity` | `a`, `b` | `float` | cosine similarity between two embedding vectors (typed `list[float]`). Pairs with the `Embed` node. |
 
 ### 2.7 `ForEach`
 

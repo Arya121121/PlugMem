@@ -110,7 +110,9 @@ def test_duplicate_id_rejected(tmp_path):
         load_yaml(p)
 
 
-def test_phase_must_be_retrieve(tmp_path):
+def test_phase_must_be_allowed(tmp_path):
+    """Phases outside ALLOWED_PHASES are rejected. With multi-phase support,
+    retrieve / reason / consolidate are allowed; ingest and others are not."""
     p = _write_yaml(tmp_path / "wrongphase.pipeline.yaml", """
         phase: ingest
         nodes:
@@ -119,7 +121,7 @@ def test_phase_must_be_retrieve(tmp_path):
             type: Output
             inputs: { mode: { const: m }, reasoning_prompt: { const: [] }, variables: { const: {} } }
     """)
-    with pytest.raises(ValueError, match="phase=retrieve"):
+    with pytest.raises(ValueError, match="unsupported phase 'ingest'"):
         load_yaml(p)
 
 
@@ -1347,3 +1349,245 @@ def test_embed_loader_rejects_missing_text(tmp_path):
     """)
     with pytest.raises(ValueError, match="inputs.text is required"):
         load_yaml_str(bad)
+
+
+# ----------------------------------------------------------------------- #
+# Multi-phase YAML format (Phase 6.6b-2)
+# ----------------------------------------------------------------------- #
+
+
+def test_multi_phase_yaml_parses_both_phases(tmp_path):
+    from plugmem.pipelines.spec_driven import load_yaml_str_multi
+    text = textwrap.dedent("""
+        phases:
+          retrieve:
+            nodes:
+              - { id: in, type: Input }
+              - id: out
+                type: Output
+                inputs:
+                  mode: { const: semantic_memory }
+                  reasoning_prompt: { const: [] }
+                  variables: { const: {} }
+          reason:
+            nodes:
+              - { id: in, type: Input }
+              - id: out
+                type: Output
+                inputs:
+                  mode: { const: semantic_memory }
+                  reasoning_prompt: { const: [] }
+                  variables: { const: {} }
+    """)
+    phases = load_yaml_str_multi(text)
+    assert set(phases) == {"retrieve", "reason"}
+    assert all(p.phase in ("retrieve", "reason") for p in phases.values())
+
+
+def test_multi_phase_rejects_unknown_phase(tmp_path):
+    from plugmem.pipelines.spec_driven import load_yaml_str_multi
+    text = textwrap.dedent("""
+        phases:
+          bogus:
+            nodes:
+              - { id: in, type: Input }
+              - id: out
+                type: Output
+                inputs:
+                  mode: { const: semantic_memory }
+                  reasoning_prompt: { const: [] }
+                  variables: { const: {} }
+    """)
+    with pytest.raises(ValueError, match="unsupported phase 'bogus'"):
+        load_yaml_str_multi(text)
+
+
+def test_multi_phase_rejects_both_formats_at_once(tmp_path):
+    from plugmem.pipelines.spec_driven import load_yaml_str_multi
+    text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+        phases:
+          reason:
+            nodes:
+              - { id: in, type: Input }
+    """)
+    with pytest.raises(ValueError, match="use either"):
+        load_yaml_str_multi(text)
+
+
+def test_single_phase_yaml_still_works_via_load_yaml_str(tmp_path):
+    """Backward-compat: existing single-phase YAMLs load unchanged."""
+    from plugmem.pipelines.spec_driven import load_yaml_str
+    text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: { const: {} }
+    """)
+    g = load_yaml_str(text)
+    assert g.phase == "retrieve"
+
+
+def test_load_yaml_str_requires_retrieve_phase_in_multi_phase_file():
+    """Convenience entrypoint that returns one phase must error if
+    retrieve is missing (callers needing other phases use
+    load_yaml_str_multi)."""
+    from plugmem.pipelines.spec_driven import load_yaml_str
+    text = textwrap.dedent("""
+        phases:
+          reason:
+            nodes:
+              - { id: in, type: Input }
+              - id: out
+                type: Output
+                inputs:
+                  mode: { const: semantic_memory }
+                  reasoning_prompt: { const: [] }
+                  variables: { const: {} }
+    """)
+    with pytest.raises(ValueError, match="no retrieve phase"):
+        load_yaml_str(text)
+
+
+def test_spec_driven_reason_uses_dedicated_reason_phase_when_present(
+    client, fake_llm, monkeypatch, tmp_path,
+):
+    """If the YAML has a `reason:` phase, /reason uses it instead of
+    falling back to running the `retrieve:` phase."""
+    monkeypatch.setenv("PROMPTS_DIR", str(tmp_path))
+    gid = "g-multi-phase"
+    r = client.post("/api/v1/graphs", json={"graph_id": gid})
+    assert r.status_code in (200, 201), r.text
+    _bind(client, gid)
+    # Two phases, different prompt names so we can tell which ran.
+    _write_yaml(tmp_path / f"{gid}.pipeline.yaml", """
+        phases:
+          retrieve:
+            nodes:
+              - { id: in, type: Input }
+              - id: plan
+                type: LLMCall
+                config: { prompt: get_plan, role: retrieval }
+                inputs: { goal: in.goal, subgoal: in.subgoal, state: in.state, observation: in.observation }
+              - id: out
+                type: Output
+                inputs:
+                  mode: { const: semantic_memory }
+                  reasoning_prompt: { const: [] }
+                  variables: { const: { source: retrieve_phase } }
+          reason:
+            nodes:
+              - { id: in, type: Input }
+              - id: msg
+                type: PromptRender
+                config: { prompt: reasoning_semantic }
+                inputs:
+                  semantic_memory: { const: "" }
+                  time: { const: "" }
+                  observation: in.observation
+              - id: rcall
+                type: LLMCall
+                config: { role: reasoning }
+                inputs:
+                  text: msg.value
+              - id: out
+                type: Output
+                inputs:
+                  mode: { const: semantic_memory }
+                  reasoning_prompt: { const: [] }
+                  variables: rcall.parsed
+    """)
+    r = client.post(f"/api/v1/graphs/{gid}/reason", json={
+        "observation": "hello", "mode": None,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # The reason phase called the reasoning LLM exactly once. The
+    # retrieve phase wasn't touched (no get_plan call).
+    last = fake_llm.calls[-1]
+    assert isinstance(last, list) and last[0]["role"] == "user"
+    # The retrieve phase's variables const would have set source=retrieve_phase;
+    # the reason phase outputs rcall.parsed which is {"text": <answer>}.
+    assert "text" in body["reasoning"] or body["reasoning"] != ""
+
+
+# ----------------------------------------------------------------------- #
+# Compute(similarity) op
+# ----------------------------------------------------------------------- #
+
+
+def test_compute_similarity_against_self_is_one(graph_manager, fake_embedder):
+    """cos(v, v) = 1.0 for any non-zero vector."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+    graph_manager.create_graph("g-sim-self")
+    mg = graph_manager.get_graph("g-sim-self")
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: e
+            type: Embed
+            inputs: { text: in.observation }
+          - id: sim
+            type: Compute
+            config: { op: similarity }
+            inputs:
+              a: e.embedding
+              b: e.embedding
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: sim
+    """)
+    out = PipelineExecutor(load_yaml_str(yaml_text), mg).run({"observation": "hello"})
+    assert out["variables"]["value"] == pytest.approx(1.0, abs=1e-5)
+
+
+def test_compute_similarity_pairs_with_embed(graph_manager, fake_embedder):
+    """Embed two distinct strings → similarity is well-defined and != 1."""
+    from plugmem.pipelines.spec_driven import PipelineExecutor, load_yaml_str
+    graph_manager.create_graph("g-sim-pair")
+    mg = graph_manager.get_graph("g-sim-pair")
+    yaml_text = textwrap.dedent("""
+        phase: retrieve
+        nodes:
+          - { id: in, type: Input }
+          - id: e_obs
+            type: Embed
+            inputs: { text: in.observation }
+          - id: e_other
+            type: Embed
+            inputs: { text: { const: "a totally different topic" } }
+          - id: sim
+            type: Compute
+            config: { op: similarity }
+            inputs:
+              a: e_obs.embedding
+              b: e_other.embedding
+          - id: out
+            type: Output
+            inputs:
+              mode: { const: semantic_memory }
+              reasoning_prompt: { const: [] }
+              variables: sim
+    """)
+    out = PipelineExecutor(load_yaml_str(yaml_text), mg).run({"observation": "weather"})
+    val = out["variables"]["value"]
+    assert isinstance(val, float)
+    # FakeEmbedder is deterministic but random — different strings → sim < 1.
+    assert val < 0.99

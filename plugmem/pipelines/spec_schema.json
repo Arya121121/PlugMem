@@ -4,20 +4,48 @@
   "title": "PlugMem spec-driven pipeline",
   "description": "Schema for a per-graph YAML pipeline interpreted by plugmem.pipelines.spec_driven. Matches the formal grammar in docs/spec_grammar.md. The reference, top-level structural rules (exactly one Input/Output, DAG, etc.), and ref-resolution rules are enforced by the loader (load_yaml_str); this schema covers the static shape.",
   "type": "object",
-  "required": ["phase", "nodes"],
-  "additionalProperties": false,
-  "properties": {
-    "phase": {
-      "description": "MVP only accepts retrieve. Other phases delegate to plugmem-default.",
-      "type": "string",
-      "enum": ["retrieve"]
+  "oneOf": [
+    {
+      "description": "Single-phase format (the original).",
+      "required": ["phase", "nodes"],
+      "additionalProperties": false,
+      "properties": {
+        "phase": { "$ref": "#/$defs/PhaseName" },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Node" }
+        }
+      }
     },
-    "nodes": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/Node" }
+    {
+      "description": "Multi-phase format. Each phase is independent.",
+      "required": ["phases"],
+      "additionalProperties": false,
+      "properties": {
+        "phases": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/PhaseName" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["nodes"],
+            "additionalProperties": false,
+            "properties": {
+              "nodes": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Node" }
+              }
+            }
+          }
+        }
+      }
     }
-  },
+  ],
   "$defs": {
+    "PhaseName": {
+      "type": "string",
+      "enum": ["retrieve", "reason", "consolidate"]
+    },
     "Ref": {
       "description": "Either a node-port reference string ('<node_id>' or '<node_id>.<path>') or a literal { const: <value> }.",
       "oneOf": [
@@ -159,7 +187,7 @@
               "enum": [
                 "eq", "ne", "lt", "gt", "lte", "gte",
                 "and", "or", "not",
-                "length", "contains", "concat"
+                "length", "contains", "concat", "similarity"
               ]
             }
           }
