@@ -129,6 +129,10 @@ export function mountPipeline({ container, getGraphId, toast }) {
     specSampleSelect: container.querySelector("#pipeline-spec-sample-select"),
     specSampleInsert: container.querySelector("#pipeline-spec-sample-insert"),
     specPaletteChips: container.querySelector("#pipeline-spec-palette-chips"),
+    layoutEditToggle: container.querySelector("#pipeline-layout-edit-toggle"),
+    layoutSaveBtn: container.querySelector("#pipeline-layout-save"),
+    layoutResetBtn: container.querySelector("#pipeline-layout-reset"),
+    layoutStatus: container.querySelector("#pipeline-layout-status"),
   };
 
   let spec = null;
@@ -152,6 +156,12 @@ export function mountPipeline({ container, getGraphId, toast }) {
   // Track the textarea's cursor so palette inserts land where the user
   // last clicked, even though clicking a palette chip blurs the textarea.
   let lastEditorCursor = 0;
+  // Canvas layout (Phase 6.5b): {<step_id>: {x, y}} populated from the
+  // sidecar on graph load. `layoutDirty` flips true when the user drags
+  // a node in edit mode; the Save button is enabled iff it's dirty.
+  let layoutOverrides = {};
+  let layoutDirty = false;
+  let layoutEditMode = false;
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
@@ -215,6 +225,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         refreshAvailablePipelines(),
         refreshSamples(),
         refreshNodeSnippets(),
+        refreshLayoutOverrides(),
       ]);
       renderSidebar();
       void refreshTraces();
@@ -666,12 +677,36 @@ export function mountPipeline({ container, getGraphId, toast }) {
       stage: StageNode,
     };
 
-    const initial = buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName, statsByName);
+    function applyLayoutOverrides(graphData) {
+      if (!layoutOverrides || !Object.keys(layoutOverrides).length) return graphData;
+      return {
+        ...graphData,
+        nodes: graphData.nodes.map((n) => {
+          const override = layoutOverrides[n.id];
+          if (!override) return n;
+          return { ...n, position: { x: override.x, y: override.y } };
+        }),
+      };
+    }
+
+    const initial = applyLayoutOverrides(
+      buildGraph(spec, dagre, MarkerType, visibleKinds, promptInfoByName, statsByName),
+    );
 
     function App() {
       const [graphState, setGraphState] = React.useState(initial);
       const onNodeClick = useCallback((_, node) => {
         if (node.data?.step) selectStep(node.data.step);
+      }, []);
+      const onNodeDragStop = useCallback((_, node) => {
+        if (!node?.position) return;
+        layoutOverrides[node.id] = { x: node.position.x, y: node.position.y };
+        layoutDirty = true;
+        if (els.layoutSaveBtn) els.layoutSaveBtn.disabled = false;
+        setLayoutStatus(
+          "Unsaved layout changes — click Save layout to persist.",
+          "warn",
+        );
       }, []);
 
       // Post-mount remeasure: after react-flow renders the cards once
@@ -697,10 +732,10 @@ export function mountPipeline({ container, getGraphId, toast }) {
             if (w && h) dimsOverride[n.id] = { width: w, height: h };
           }
           if (Object.keys(dimsOverride).length === 0) return;
-          const relaid = buildGraph(
+          const relaid = applyLayoutOverrides(buildGraph(
             spec, dagre, MarkerType, visibleKinds,
             promptInfoByName, statsByName, dimsOverride,
-          );
+          ));
           if (!cancelled) setGraphState(relaid);
         });
         return () => { cancelled = true; cancelAnimationFrame(raf); };
@@ -712,7 +747,8 @@ export function mountPipeline({ container, getGraphId, toast }) {
         edges: graphState.edges,
         nodeTypes,
         onNodeClick,
-        nodesDraggable: false,
+        onNodeDragStop,
+        nodesDraggable: layoutEditMode,
         nodesConnectable: false,
         edgesFocusable: false,
         elementsSelectable: true,
@@ -1423,6 +1459,85 @@ export function mountPipeline({ container, getGraphId, toast }) {
     setEditorStatus("Reverted to active version.", "ok");
   }
 
+  // --------------------------------------------------------------------- //
+  // Canvas layout (Phase 6.5b): sidecar-driven hand positioning
+  // --------------------------------------------------------------------- //
+
+  function setLayoutStatus(text, kind = "") {
+    if (!els.layoutStatus) return;
+    els.layoutStatus.textContent = text || "";
+    els.layoutStatus.className = `hint ${kind}`.trim();
+  }
+
+  async function refreshLayoutOverrides() {
+    layoutOverrides = {};
+    layoutDirty = false;
+    if (els.layoutSaveBtn) els.layoutSaveBtn.disabled = true;
+    setLayoutStatus("");
+    const gid = getGraphId();
+    if (!gid) return;
+    try {
+      const res = await api.getPipelineLayout(gid);
+      for (const [nid, pos] of Object.entries(res.positions || {})) {
+        layoutOverrides[nid] = { x: pos.x, y: pos.y };
+      }
+    } catch (err) {
+      // Failure to load shouldn't break the canvas — just fall back to dagre.
+      console.warn("getPipelineLayout failed:", err);
+    }
+  }
+
+  async function saveLayoutNow() {
+    const gid = getGraphId();
+    if (!gid) { toast("Pick a graph first.", "warn"); return; }
+    if (!layoutDirty) {
+      setLayoutStatus("No layout changes to save.", "");
+      return;
+    }
+    els.layoutSaveBtn.disabled = true;
+    setLayoutStatus("Saving layout…");
+    try {
+      await api.savePipelineLayout(gid, layoutOverrides, null);
+      layoutDirty = false;
+      setLayoutStatus("Layout saved.", "ok");
+      toast("Pipeline layout saved.");
+    } catch (err) {
+      setLayoutStatus(`Save failed: ${err.message}`, "err");
+      els.layoutSaveBtn.disabled = false;
+    }
+  }
+
+  async function resetLayoutNow() {
+    const gid = getGraphId();
+    if (!gid) return;
+    if (!confirm("Reset to auto-layout? Saved node positions will be discarded.")) return;
+    try {
+      await api.resetPipelineLayout(gid);
+      layoutOverrides = {};
+      layoutDirty = false;
+      els.layoutSaveBtn.disabled = true;
+      setLayoutStatus("Layout reset. Reloading…", "ok");
+      if (xyflowMod) mountReactApp(xyflowMod);
+      toast("Pipeline layout reset.");
+    } catch (err) {
+      setLayoutStatus(`Reset failed: ${err.message}`, "err");
+    }
+  }
+
+  els.layoutEditToggle?.addEventListener("change", () => {
+    layoutEditMode = els.layoutEditToggle.checked;
+    els.canvas?.classList.toggle("is-editing", layoutEditMode);
+    if (xyflowMod) mountReactApp(xyflowMod);
+    setLayoutStatus(
+      layoutEditMode
+        ? "Edit mode on — drag nodes to reposition."
+        : "",
+      "",
+    );
+  });
+  els.layoutSaveBtn?.addEventListener("click", saveLayoutNow);
+  els.layoutResetBtn?.addEventListener("click", resetLayoutNow);
+
   async function reloadCanvasForBinding() {
     try {
       spec = await fetchSpec();
@@ -1562,7 +1677,12 @@ export function mountPipeline({ container, getGraphId, toast }) {
         // Close any open prompt editor for the previous graph.
         els.detail.hidden = true;
         activePromptStep = null;
-        await Promise.all([refreshPromptInfo(), refreshStepStats(), refreshBinding()]);
+        await Promise.all([
+          refreshPromptInfo(),
+          refreshStepStats(),
+          refreshBinding(),
+          refreshLayoutOverrides(),
+        ]);
         void refreshTraces();
         // Binding may have changed — refetch the spec view + re-render.
         await reloadCanvasForBinding();

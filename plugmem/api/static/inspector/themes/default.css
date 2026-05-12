@@ -1870,3 +1870,21 @@ details[open] summary { margin-bottom: var(--space); }
   background: var(--bg-hover);
   border-color: var(--accent);
 }
+
+/* ------------------------------------------------------------------ */
+/* Canvas layout edit-mode (Phase 6.5b)                                */
+/* ------------------------------------------------------------------ */
+.pipeline-layout-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.pipeline-canvas.is-editing .react-flow__node {
+  cursor: grab;
+}
+.pipeline-canvas.is-editing .react-flow__node:active {
+  cursor: grabbing;
+}
+#pipeline-layout-status.ok    { color: var(--ok); }
+#pipeline-layout-status.warn  { color: var(--warn); }
+#pipeline-layout-status.err   { color: var(--danger); }

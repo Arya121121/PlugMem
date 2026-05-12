@@ -96,6 +96,14 @@ export const api = {
     request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/spec_view`),
   listPipelineSpecSamples: () => request("GET", "/pipeline/samples"),
   listPipelineNodeSnippets: () => request("GET", "/pipeline/node_snippets"),
+  getPipelineLayout: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/layout`),
+  savePipelineLayout: (gid, positions, viewport) =>
+    request("PUT", `/graphs/${encodeURIComponent(gid)}/pipeline/layout`, {
+      body: { positions, viewport },
+    }),
+  resetPipelineLayout: (gid) =>
+    request("DELETE", `/graphs/${encodeURIComponent(gid)}/pipeline/layout`),
   listPipelinePrompts: (gid) =>
     request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/prompts`),
   updatePipelinePrompt: (gid, name, body) =>

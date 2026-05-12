@@ -733,6 +733,33 @@ class PipelineNodeSnippetsResponse(BaseModel):
 
 
 # ------------------------------------------------------------------ #
+# Canvas layout (Phase 6.5b) — per-graph sidecar
+# ------------------------------------------------------------------ #
+
+
+class CanvasNodePosition(BaseModel):
+    x: float
+    y: float
+
+
+class CanvasViewport(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+    zoom: float = 1.0
+
+
+class CanvasLayoutResponse(BaseModel):
+    graph_id: str
+    positions: Dict[str, CanvasNodePosition] = Field(default_factory=dict)
+    viewport: Optional[CanvasViewport] = None
+
+
+class CanvasLayoutSaveRequest(BaseModel):
+    positions: Dict[str, CanvasNodePosition]
+    viewport: Optional[CanvasViewport] = None
+
+
+# ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
 

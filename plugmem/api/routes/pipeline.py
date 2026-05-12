@@ -36,6 +36,10 @@ from plugmem.api.schemas import (
     PipelineBindingRequest,
     PipelineBindingResponse,
     PipelineInfo,
+    CanvasLayoutResponse,
+    CanvasLayoutSaveRequest,
+    CanvasNodePosition,
+    CanvasViewport,
     PipelineListResponse,
     PipelineNodeSnippet,
     PipelineNodeSnippetsResponse,
@@ -71,7 +75,7 @@ from plugmem.pipelines import (
     is_registered as pipeline_is_registered,
     list_pipelines as list_registered_pipelines,
 )
-from plugmem.pipelines import pipeline_views, spec_storage
+from plugmem.pipelines import layout_storage, pipeline_views, spec_storage
 from plugmem.pipelines.spec_driven import load_yaml_str
 from plugmem.pipelines.sample_specs import PLUGMEM_DEFAULT_RETRIEVE_YAML
 from plugmem.prompts.registry import PromptRegistry, TemplatePrompt
@@ -599,6 +603,67 @@ def get_pipeline_spec_version(
     return SpecVersionContentResponse(
         graph_id=graph_id, version=info, content=content,
     )
+
+
+# ------------------------------------------------------------------ #
+# Canvas layout (Phase 6.5b) — per-graph hand-positioned node coords
+# ------------------------------------------------------------------ #
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/layout",
+    response_model=CanvasLayoutResponse,
+)
+def get_pipeline_layout(graph_id: str) -> CanvasLayoutResponse:
+    """Return the saved node-position sidecar (empty if none persisted)."""
+    _check_graph_exists(graph_id)
+    layout = layout_storage.load_layout(graph_id)
+    return CanvasLayoutResponse(
+        graph_id=graph_id,
+        positions={
+            nid: CanvasNodePosition(**pos) for nid, pos in layout.positions.items()
+        },
+        viewport=CanvasViewport(**layout.viewport) if layout.viewport else None,
+    )
+
+
+@graph_router.put(
+    "/{graph_id}/pipeline/layout",
+    response_model=CanvasLayoutResponse,
+)
+def save_pipeline_layout(
+    graph_id: str, body: CanvasLayoutSaveRequest,
+) -> CanvasLayoutResponse:
+    """Persist hand-positioned node coordinates."""
+    _check_graph_exists(graph_id)
+    try:
+        positions = {nid: {"x": p.x, "y": p.y} for nid, p in body.positions.items()}
+        viewport = None
+        if body.viewport is not None:
+            viewport = {"x": body.viewport.x, "y": body.viewport.y, "zoom": body.viewport.zoom}
+        layout = layout_storage.save_layout(
+            graph_id, positions, viewport=viewport,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return CanvasLayoutResponse(
+        graph_id=graph_id,
+        positions={
+            nid: CanvasNodePosition(**pos) for nid, pos in layout.positions.items()
+        },
+        viewport=CanvasViewport(**layout.viewport) if layout.viewport else None,
+    )
+
+
+@graph_router.delete(
+    "/{graph_id}/pipeline/layout",
+    response_model=CanvasLayoutResponse,
+)
+def reset_pipeline_layout(graph_id: str) -> CanvasLayoutResponse:
+    """Forget hand-positions; canvas falls back to dagre auto-layout."""
+    _check_graph_exists(graph_id)
+    layout_storage.clear_layout(graph_id)
+    return CanvasLayoutResponse(graph_id=graph_id, positions={}, viewport=None)
 
 
 @graph_router.post(
