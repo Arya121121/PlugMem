@@ -23,7 +23,9 @@ algorithm itself with a custom pipeline.
 | 6.2 | Direction B — `SpecDrivenPipeline` MVP: retrieve-only, YAML-driven | shipped |
 | 6.3 | Loops in spec-driven pipelines (`ForEach` node) | shipped |
 | 6.4 | Branch + Compute nodes in spec-driven pipelines | shipped |
-| 6.5 | Visual editor (xyflow) + non-destructive edits + Python hot-reload | future |
+| 6.5a | Non-destructive YAML versioning + YAML editor UI + version history | shipped |
+| 6.5b | Interactive xyflow canvas (drag-and-drop palette, port wiring) | future |
+| 6.5c | Python hot-reload for forked pipeline modules | future |
 | 6.6 | Spec-driven coverage of close / insert / consolidate phases | future |
 
 ## Cross-cutting principles
@@ -180,9 +182,61 @@ multi-way decision shows up in close/insert.
 
 ---
 
-## Phase 6.5 — Visual editor + non-destructive edits + Python hot-reload
+## Phase 6.5a — Non-destructive YAML versioning + editor UI (shipped)
 
-This is the big one. Three intertwined capabilities.
+A versioned filesystem store under `{PROMPTS_DIR}/.pipeline_history/{graph_id}/`
+holds every saved spec; the "live" YAML at `{PROMPTS_DIR}/{graph_id}.pipeline.yaml`
+is always a mirror of the active version. The executor still reads the live
+file — no executor change needed.
+
+**Storage module:** `plugmem/pipelines/spec_storage.py`
+
+- `save_new_version(graph_id, content, *, note, validator)` — validate via
+  `load_yaml_str`, write a new `{version_id}.pipeline.yaml` + `.meta.json`,
+  atomically flip `current.txt`, rewrite the live file.
+- `list_versions(graph_id)` — newest first; sorted by microsecond-precision
+  `version_id` so same-second saves preserve order.
+- `read_version(graph_id, version_id)` — historical content.
+- `rollback(graph_id, version_id)` — point `current.txt` at the chosen
+  version and rewrite the live file; no new version row.
+- `adopt_existing_live(graph_id)` — if a user dropped a YAML on disk
+  out-of-band, seed history with it on first list/save so prior content
+  is never destroyed.
+
+`version_id` format: `v_YYYYMMDDTHHMMSS_uuuuuu_xxxxxx` (UTC, microseconds, hex).
+
+**API routes:** all under `/api/v1/graphs/{gid}/pipeline/spec`
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/pipeline/spec`                                       | Current YAML + active version id + live path |
+| PUT    | `/pipeline/spec`                                       | Validate + save a new version (422 on bad spec) |
+| POST   | `/pipeline/spec/validate`                              | Dry-run validation, no disk write |
+| GET    | `/pipeline/spec/versions`                              | List versions newest first |
+| GET    | `/pipeline/spec/versions/{vid}`                        | Historical content |
+| POST   | `/pipeline/spec/versions/{vid}/rollback`               | Promote vid as active |
+
+**UI:** Pipeline tab now exposes a "Bound pipeline" picker in the sidebar
+and a "Spec editor" panel above the canvas (only shown when bound to
+`spec-driven`). The panel has:
+
+- A YAML textarea pre-loaded with the active version.
+- `Validate` button (POST `/spec/validate`).
+- `Save new version` button (PUT `/spec`) with an optional note.
+- `Discard changes` to restore the active version.
+- Collapsible "Version history" list with per-row `View` (load read-only)
+  and `Rollback` actions.
+
+**Test coverage:** `tests/test_spec_storage.py` (17 tests) — storage
+behaviors (atomic save, parent tracking, rollback, adopt) + route layer
+(get/put/validate/list/rollback/end-to-end retrieve).
+
+---
+
+## Phase 6.5b / 6.5c — Interactive canvas + Python hot-reload (deferred)
+
+These remain on the roadmap but were deferred from 6.5a so the
+versioning foundation could ship and be tested first.
 
 ### A. Visual editor
 
@@ -299,9 +353,9 @@ in `SpecDrivenPipeline`.
 | Snapshot tool with `--check` | 6.1 (shipped) |
 | YAML-defined retrieve | 6.2 (shipped) |
 | Loops in YAML | 6.3 (in progress) |
-| Branch + Compute | 6.4 |
-| Non-destructive YAML versioning | 6.5a |
-| Visual editor | 6.5b |
+| Branch + Compute | 6.4 (shipped) |
+| Non-destructive YAML versioning + editor UI | 6.5a (shipped) |
+| Visual editor (xyflow drag-and-drop) | 6.5b |
 | Python hot-reload | 6.5c |
 | Spec-driven for close / insert / consolidate | 6.6 |
 

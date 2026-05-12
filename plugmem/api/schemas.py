@@ -659,6 +659,58 @@ class PipelineBindingRequest(BaseModel):
 
 
 # ------------------------------------------------------------------ #
+# Spec-driven YAML editor (Phase 6.5a)
+# ------------------------------------------------------------------ #
+
+
+class SpecVersionInfo(BaseModel):
+    version_id: str
+    ts: str
+    parent_version_id: Optional[str] = None
+    note: str = ""
+    active: bool = False
+
+
+class SpecDocumentResponse(BaseModel):
+    graph_id: str
+    content: str = ""
+    active_version_id: Optional[str] = None
+    exists: bool = False
+    live_path: str
+
+
+class SpecSaveRequest(BaseModel):
+    content: str = Field(..., description="Full YAML source — saved verbatim.")
+    note: str = Field("", description="Optional human-readable note for the audit log.")
+
+
+class SpecSaveResponse(BaseModel):
+    graph_id: str
+    version: SpecVersionInfo
+
+
+class SpecValidateRequest(BaseModel):
+    content: str
+
+
+class SpecValidateResponse(BaseModel):
+    ok: bool
+    error: Optional[str] = None
+
+
+class SpecVersionsResponse(BaseModel):
+    graph_id: str
+    versions: List[SpecVersionInfo] = Field(default_factory=list)
+    active_version_id: Optional[str] = None
+
+
+class SpecVersionContentResponse(BaseModel):
+    graph_id: str
+    version: SpecVersionInfo
+    content: str
+
+
+# ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
 

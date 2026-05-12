@@ -39,6 +39,14 @@ from plugmem.api.schemas import (
     PipelineListResponse,
     PipelineStatsResponse,
     PipelineStepStats,
+    SpecDocumentResponse,
+    SpecSaveRequest,
+    SpecSaveResponse,
+    SpecValidateRequest,
+    SpecValidateResponse,
+    SpecVersionContentResponse,
+    SpecVersionInfo,
+    SpecVersionsResponse,
     StepTraceSummary,
     StepTracesResponse,
     TraceCapRequest,
@@ -59,6 +67,8 @@ from plugmem.pipelines import (
     is_registered as pipeline_is_registered,
     list_pipelines as list_registered_pipelines,
 )
+from plugmem.pipelines import spec_storage
+from plugmem.pipelines.spec_driven import load_yaml_str
 from plugmem.prompts.registry import PromptRegistry, TemplatePrompt
 
 logger = logging.getLogger(__name__)
@@ -429,6 +439,131 @@ def get_trace(graph_id: str, trace_id: str) -> TraceDetailResponse:
         meta=row.get("meta") or {},
         steps=[TraceStep(**s) for s in (row.get("steps") or [])],
     )
+
+
+# ------------------------------------------------------------------ #
+# Spec-driven YAML editor (Phase 6.5a) — non-destructive, versioned
+# ------------------------------------------------------------------ #
+
+
+def _validate_spec_text(text: str) -> None:
+    """Raises ValueError if YAML is invalid; mapped to 422 by the route."""
+    load_yaml_str(text)
+
+
+def _version_info(v: spec_storage.SpecVersion) -> SpecVersionInfo:
+    return SpecVersionInfo(
+        version_id=v.version_id, ts=v.ts,
+        parent_version_id=v.parent_version_id,
+        note=v.note, active=v.active,
+    )
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/spec",
+    response_model=SpecDocumentResponse,
+)
+def get_pipeline_spec_yaml(graph_id: str) -> SpecDocumentResponse:
+    """Return the current spec-driven YAML source for *graph_id*."""
+    _check_graph_exists(graph_id)
+    content = spec_storage.read_current_content(graph_id) or ""
+    active = spec_storage.get_active_version_id(graph_id)
+    return SpecDocumentResponse(
+        graph_id=graph_id,
+        content=content,
+        active_version_id=active,
+        exists=bool(content),
+        live_path=str(spec_storage.live_path(graph_id)),
+    )
+
+
+@graph_router.put(
+    "/{graph_id}/pipeline/spec",
+    response_model=SpecSaveResponse,
+)
+def save_pipeline_spec_yaml(graph_id: str, body: SpecSaveRequest) -> SpecSaveResponse:
+    """Validate + save a new version. Prior content is preserved in history."""
+    _check_graph_exists(graph_id)
+    try:
+        version = spec_storage.save_new_version(
+            graph_id, body.content,
+            note=body.note,
+            validator=_validate_spec_text,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return SpecSaveResponse(graph_id=graph_id, version=_version_info(version))
+
+
+@graph_router.post(
+    "/{graph_id}/pipeline/spec/validate",
+    response_model=SpecValidateResponse,
+)
+def validate_pipeline_spec_yaml(
+    graph_id: str, body: SpecValidateRequest,
+) -> SpecValidateResponse:
+    """Run the loader against *content* without writing anything to disk."""
+    _check_graph_exists(graph_id)
+    try:
+        _validate_spec_text(body.content)
+    except ValueError as e:
+        return SpecValidateResponse(ok=False, error=str(e))
+    return SpecValidateResponse(ok=True)
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/spec/versions",
+    response_model=SpecVersionsResponse,
+)
+def list_pipeline_spec_versions(graph_id: str) -> SpecVersionsResponse:
+    _check_graph_exists(graph_id)
+    versions = spec_storage.list_versions(graph_id)
+    return SpecVersionsResponse(
+        graph_id=graph_id,
+        versions=[_version_info(v) for v in versions],
+        active_version_id=spec_storage.get_active_version_id(graph_id),
+    )
+
+
+@graph_router.get(
+    "/{graph_id}/pipeline/spec/versions/{version_id}",
+    response_model=SpecVersionContentResponse,
+)
+def get_pipeline_spec_version(
+    graph_id: str, version_id: str,
+) -> SpecVersionContentResponse:
+    _check_graph_exists(graph_id)
+    content = spec_storage.read_version(graph_id, version_id)
+    if content is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Version '{version_id}' not found for graph '{graph_id}'",
+        )
+    # Build a SpecVersionInfo from the list (cheapest accurate way to set `active`).
+    info = next(
+        (_version_info(v) for v in spec_storage.list_versions(graph_id)
+         if v.version_id == version_id),
+        SpecVersionInfo(version_id=version_id, ts="", note="", active=False),
+    )
+    return SpecVersionContentResponse(
+        graph_id=graph_id, version=info, content=content,
+    )
+
+
+@graph_router.post(
+    "/{graph_id}/pipeline/spec/versions/{version_id}/rollback",
+    response_model=SpecSaveResponse,
+)
+def rollback_pipeline_spec_version(
+    graph_id: str, version_id: str,
+) -> SpecSaveResponse:
+    """Make *version_id* active. Live file is rewritten; no new version row."""
+    _check_graph_exists(graph_id)
+    try:
+        version = spec_storage.rollback(graph_id, version_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return SpecSaveResponse(graph_id=graph_id, version=_version_info(version))
 
 
 @graph_router.post(

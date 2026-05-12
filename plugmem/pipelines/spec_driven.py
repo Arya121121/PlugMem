@@ -159,9 +159,17 @@ def _resolve_ref(
 
 def load_yaml(path: Path) -> PipelineGraph:
     """Parse + validate a pipeline YAML. Raises ValueError on bad spec."""
-    raw = yaml.safe_load(path.read_text())
+    return load_yaml_str(path.read_text(), source=str(path))
+
+
+def load_yaml_str(text: str, *, source: str = "<inline>") -> PipelineGraph:
+    """Same as :func:`load_yaml` but takes the YAML source as a string."""
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ValueError(f"YAML parse error in {source}: {e}") from e
     if not isinstance(raw, dict):
-        raise ValueError(f"YAML must be a top-level dict: {path}")
+        raise ValueError(f"YAML must be a top-level dict: {source}")
     phase = raw.get("phase", "retrieve")
     if phase != "retrieve":
         raise ValueError(

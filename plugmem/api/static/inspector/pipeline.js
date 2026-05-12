@@ -108,6 +108,19 @@ export function mountPipeline({ container, getGraphId, toast }) {
     tracesRefresh: container.querySelector("#pipeline-traces-refresh"),
     tracesCap: container.querySelector("#pipeline-traces-cap"),
     tracesCapSave: container.querySelector("#pipeline-traces-cap-save"),
+    bindingSelect: container.querySelector("#pipeline-binding-select"),
+    bindingDesc: container.querySelector("#pipeline-binding-desc"),
+    specEditor: container.querySelector("#pipeline-spec-editor"),
+    specEditorPath: container.querySelector("#pipeline-spec-editor-path"),
+    specEditorActive: container.querySelector("#pipeline-spec-editor-active"),
+    specEditorToggle: container.querySelector("#pipeline-spec-editor-toggle"),
+    specEditorTextarea: container.querySelector("#pipeline-spec-editor-textarea"),
+    specEditorNote: container.querySelector("#pipeline-spec-editor-note"),
+    specEditorValidate: container.querySelector("#pipeline-spec-editor-validate"),
+    specEditorDiscard: container.querySelector("#pipeline-spec-editor-discard"),
+    specEditorSave: container.querySelector("#pipeline-spec-editor-save"),
+    specEditorStatus: container.querySelector("#pipeline-spec-editor-status"),
+    specVersionsList: container.querySelector("#pipeline-spec-versions-list"),
   };
 
   let spec = null;
@@ -120,6 +133,12 @@ export function mountPipeline({ container, getGraphId, toast }) {
   const bindingByRole = new Map();
   const statsByName = new Map();
   let activePromptStep = null;
+  // Phase 6.5a: pipeline binding + spec editor state
+  let availablePipelines = [];
+  let currentBinding = null;
+  let savedSpecContent = "";
+  let savedSpecVersionId = null;
+  let savedSpecPath = "";
 
   els.detailClose.addEventListener("click", () => {
     els.detail.hidden = true;
@@ -164,9 +183,15 @@ export function mountPipeline({ container, getGraphId, toast }) {
       spec = s;
       xyflowMod = mod;
       currentGraphId = getGraphId();
-      await Promise.all([refreshPromptInfo(), refreshModelInfo(), refreshStepStats()]);
+      await Promise.all([
+        refreshPromptInfo(),
+        refreshModelInfo(),
+        refreshStepStats(),
+        refreshAvailablePipelines(),
+      ]);
       renderSidebar();
       void refreshTraces();
+      void refreshBinding();
       mountReactApp(mod);
       els.empty.hidden = true;
       loaded = true;
@@ -1127,6 +1152,245 @@ export function mountPipeline({ container, getGraphId, toast }) {
     return escapeHtml(s).replace(/"/g, "&quot;");
   }
 
+  // --------------------------------------------------------------------- //
+  // Pipeline binding + spec editor (Phase 6.5a)
+  // --------------------------------------------------------------------- //
+
+  async function refreshAvailablePipelines() {
+    if (availablePipelines.length) return;
+    try {
+      const res = await api.listPipelines();
+      availablePipelines = res.pipelines || [];
+    } catch (err) {
+      availablePipelines = [];
+      console.warn("listPipelines failed:", err);
+    }
+  }
+
+  function renderBindingSelect() {
+    if (!els.bindingSelect) return;
+    const cur = currentBinding || "";
+    els.bindingSelect.innerHTML = "";
+    for (const p of availablePipelines) {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      opt.textContent = p.name;
+      if (p.name === cur) opt.selected = true;
+      els.bindingSelect.appendChild(opt);
+    }
+    const cur_p = availablePipelines.find((p) => p.name === cur);
+    if (els.bindingDesc) {
+      els.bindingDesc.textContent = cur_p?.description || "";
+    }
+  }
+
+  async function refreshBinding() {
+    const gid = getGraphId();
+    if (!gid) {
+      currentBinding = null;
+      renderBindingSelect();
+      toggleSpecEditorVisible(false);
+      return;
+    }
+    try {
+      const res = await api.getGraphPipeline(gid);
+      currentBinding = res.pipeline;
+    } catch (err) {
+      currentBinding = null;
+      console.warn("getGraphPipeline failed:", err);
+    }
+    renderBindingSelect();
+    toggleSpecEditorVisible(currentBinding === "spec-driven");
+    if (currentBinding === "spec-driven") {
+      await Promise.all([refreshSpecEditor(), refreshSpecVersions()]);
+    }
+  }
+
+  function toggleSpecEditorVisible(visible) {
+    if (!els.specEditor) return;
+    els.specEditor.hidden = !visible;
+  }
+
+  function setEditorStatus(text, kind = "") {
+    if (!els.specEditorStatus) return;
+    els.specEditorStatus.textContent = text || "";
+    els.specEditorStatus.className = `hint ${kind}`.trim();
+  }
+
+  function markDirty() {
+    if (!els.specEditorTextarea) return;
+    const dirty = els.specEditorTextarea.value !== savedSpecContent;
+    els.specEditorTextarea.classList.toggle("dirty", dirty);
+    els.specEditorSave.disabled = false;
+    els.specEditorDiscard.disabled = !dirty;
+  }
+
+  async function refreshSpecEditor() {
+    const gid = getGraphId();
+    if (!gid || !els.specEditorTextarea) return;
+    setEditorStatus("Loading…");
+    try {
+      const res = await api.getPipelineSpecYaml(gid);
+      savedSpecContent = res.content || "";
+      savedSpecVersionId = res.active_version_id || null;
+      savedSpecPath = res.live_path || "";
+      els.specEditorTextarea.value = savedSpecContent;
+      els.specEditorPath.textContent = savedSpecPath;
+      els.specEditorActive.textContent = savedSpecVersionId
+        ? `active: ${savedSpecVersionId}`
+        : "no saved version yet";
+      els.specEditorTextarea.classList.remove("dirty");
+      els.specEditorDiscard.disabled = true;
+      setEditorStatus(savedSpecContent ? "Loaded." : "No YAML yet — write one and save.", "ok");
+    } catch (err) {
+      setEditorStatus(`Load failed: ${err.message}`, "err");
+    }
+  }
+
+  async function refreshSpecVersions() {
+    const gid = getGraphId();
+    if (!gid || !els.specVersionsList) return;
+    els.specVersionsList.innerHTML = `<div class="hint">Loading versions…</div>`;
+    try {
+      const res = await api.listPipelineSpecVersions(gid);
+      const versions = res.versions || [];
+      if (!versions.length) {
+        els.specVersionsList.innerHTML = `<div class="hint">No versions yet — saving creates one.</div>`;
+        return;
+      }
+      els.specVersionsList.innerHTML = "";
+      for (const v of versions) {
+        const row = document.createElement("div");
+        row.className = `pipeline-spec-version-row${v.active ? " active" : ""}`;
+        const ts = v.ts || v.version_id;
+        const note = v.note || (v.active ? "active" : "");
+        row.innerHTML = `
+          <code title="${escapeAttr(v.version_id)}">${escapeHtml(ts)}</code>
+          <span class="pipeline-spec-version-note" title="${escapeAttr(v.note || "")}">${escapeHtml(note)}</span>
+          <button type="button" class="btn" data-action="view" data-version="${escapeAttr(v.version_id)}">View</button>
+          <button type="button" class="btn" data-action="rollback" data-version="${escapeAttr(v.version_id)}" ${v.active ? "disabled" : ""}>${v.active ? "Active" : "Rollback"}</button>
+        `;
+        els.specVersionsList.appendChild(row);
+      }
+      els.specVersionsList.querySelectorAll("button[data-action='view']").forEach((b) => {
+        b.addEventListener("click", () => viewVersion(b.dataset.version));
+      });
+      els.specVersionsList.querySelectorAll("button[data-action='rollback']").forEach((b) => {
+        b.addEventListener("click", () => rollbackVersion(b.dataset.version));
+      });
+    } catch (err) {
+      els.specVersionsList.innerHTML = `<div class="hint">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function viewVersion(vid) {
+    const gid = getGraphId();
+    if (!gid) return;
+    try {
+      const res = await api.getPipelineSpecVersion(gid, vid);
+      els.specEditorTextarea.value = res.content || "";
+      els.specEditorTextarea.classList.toggle("dirty",
+        els.specEditorTextarea.value !== savedSpecContent);
+      els.specEditorDiscard.disabled = false;
+      setEditorStatus(`Viewing ${vid} — Save creates a new version. Discard to restore active.`, "ok");
+    } catch (err) {
+      setEditorStatus(`View failed: ${err.message}`, "err");
+    }
+  }
+
+  async function rollbackVersion(vid) {
+    const gid = getGraphId();
+    if (!gid) return;
+    if (!confirm(`Rollback to ${vid}? The live YAML will be replaced with that version's contents.`)) return;
+    try {
+      await api.rollbackPipelineSpecVersion(gid, vid);
+      toast(`Rolled back to ${vid.slice(0, 24)}…`);
+      await Promise.all([refreshSpecEditor(), refreshSpecVersions()]);
+    } catch (err) {
+      toast(`Rollback failed: ${err.message}`, "error");
+    }
+  }
+
+  async function validateEditor() {
+    const gid = getGraphId();
+    if (!gid) return;
+    setEditorStatus("Validating…");
+    try {
+      const res = await api.validatePipelineSpecYaml(gid, els.specEditorTextarea.value);
+      if (res.ok) {
+        setEditorStatus("Valid.", "ok");
+      } else {
+        setEditorStatus(res.error || "Invalid YAML.", "err");
+      }
+    } catch (err) {
+      setEditorStatus(`Validate failed: ${err.message}`, "err");
+    }
+  }
+
+  async function saveEditor() {
+    const gid = getGraphId();
+    if (!gid) return;
+    const content = els.specEditorTextarea.value;
+    const note = els.specEditorNote.value || "";
+    els.specEditorSave.disabled = true;
+    setEditorStatus("Saving…");
+    try {
+      const res = await api.savePipelineSpecYaml(gid, content, note);
+      savedSpecContent = content;
+      savedSpecVersionId = res.version.version_id;
+      els.specEditorActive.textContent = `active: ${savedSpecVersionId}`;
+      els.specEditorTextarea.classList.remove("dirty");
+      els.specEditorDiscard.disabled = true;
+      els.specEditorNote.value = "";
+      setEditorStatus(`Saved as ${savedSpecVersionId}.`, "ok");
+      toast(`Spec saved (${savedSpecVersionId.slice(0, 22)}…)`);
+      await refreshSpecVersions();
+    } catch (err) {
+      setEditorStatus(err.message, "err");
+    } finally {
+      els.specEditorSave.disabled = false;
+    }
+  }
+
+  function discardEditorChanges() {
+    if (!els.specEditorTextarea) return;
+    els.specEditorTextarea.value = savedSpecContent;
+    els.specEditorTextarea.classList.remove("dirty");
+    els.specEditorDiscard.disabled = true;
+    setEditorStatus("Reverted to active version.", "ok");
+  }
+
+  els.bindingSelect?.addEventListener("change", async (e) => {
+    const gid = getGraphId();
+    if (!gid) { toast("Pick a graph first.", "warn"); return; }
+    const next = e.target.value;
+    if (next === currentBinding) return;
+    try {
+      await api.setGraphPipeline(gid, next);
+      currentBinding = next;
+      toast(`Pipeline → ${next}`);
+      const cur_p = availablePipelines.find((p) => p.name === next);
+      if (els.bindingDesc) els.bindingDesc.textContent = cur_p?.description || "";
+      toggleSpecEditorVisible(next === "spec-driven");
+      if (next === "spec-driven") {
+        await Promise.all([refreshSpecEditor(), refreshSpecVersions()]);
+      }
+    } catch (err) {
+      toast(`set pipeline: ${err.message}`, "error");
+      // Revert UI selection.
+      e.target.value = currentBinding || "";
+    }
+  });
+
+  els.specEditorTextarea?.addEventListener("input", markDirty);
+  els.specEditorValidate?.addEventListener("click", validateEditor);
+  els.specEditorSave?.addEventListener("click", saveEditor);
+  els.specEditorDiscard?.addEventListener("click", discardEditorChanges);
+  els.specEditorToggle?.addEventListener("click", () => {
+    const isCollapsed = els.specEditor.classList.toggle("collapsed");
+    els.specEditorToggle.textContent = isCollapsed ? "Expand" : "Collapse";
+  });
+
   return {
     async refresh({ graphId } = {}) {
       if (!loaded) {
@@ -1138,7 +1402,7 @@ export function mountPipeline({ container, getGraphId, toast }) {
         // Close any open prompt editor for the previous graph.
         els.detail.hidden = true;
         activePromptStep = null;
-        await Promise.all([refreshPromptInfo(), refreshStepStats()]);
+        await Promise.all([refreshPromptInfo(), refreshStepStats(), refreshBinding()]);
         void refreshTraces();
         if (xyflowMod) mountReactApp(xyflowMod);
       }

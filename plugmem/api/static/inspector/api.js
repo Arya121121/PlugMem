@@ -123,4 +123,32 @@ export const api = {
       `/graphs/${encodeURIComponent(gid)}/pipeline/steps/${encodeURIComponent(stepName)}/traces`,
       { query: { limit } },
     ),
+  // Pipeline binding + spec-driven YAML editor (Phase 5.5 / 6.5a)
+  listPipelines: () => request("GET", "/pipeline/pipelines"),
+  getGraphPipeline: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline`),
+  setGraphPipeline: (gid, name) =>
+    request("PUT", `/graphs/${encodeURIComponent(gid)}/pipeline`, { body: { pipeline: name } }),
+  getPipelineSpecYaml: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/spec`),
+  savePipelineSpecYaml: (gid, content, note = "") =>
+    request("PUT", `/graphs/${encodeURIComponent(gid)}/pipeline/spec`, {
+      body: { content, note },
+    }),
+  validatePipelineSpecYaml: (gid, content) =>
+    request("POST", `/graphs/${encodeURIComponent(gid)}/pipeline/spec/validate`, {
+      body: { content },
+    }),
+  listPipelineSpecVersions: (gid) =>
+    request("GET", `/graphs/${encodeURIComponent(gid)}/pipeline/spec/versions`),
+  getPipelineSpecVersion: (gid, vid) =>
+    request(
+      "GET",
+      `/graphs/${encodeURIComponent(gid)}/pipeline/spec/versions/${encodeURIComponent(vid)}`,
+    ),
+  rollbackPipelineSpecVersion: (gid, vid) =>
+    request(
+      "POST",
+      `/graphs/${encodeURIComponent(gid)}/pipeline/spec/versions/${encodeURIComponent(vid)}/rollback`,
+    ),
 };

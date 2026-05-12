@@ -195,6 +195,11 @@
     <section id="tab-pipeline" class="tab-panel" role="tabpanel" hidden>
       <aside class="sidebar pipeline-sidebar">
         <div class="form-row">
+          <span class="form-label">Bound pipeline</span>
+          <select id="pipeline-binding-select"></select>
+          <div id="pipeline-binding-desc" class="hint"></div>
+        </div>
+        <div class="form-row">
           <span class="form-label">View</span>
           <label class="check">
             <input type="checkbox" id="pipeline-fold-toggle">
@@ -225,6 +230,34 @@
         <div class="hint">Click any step card to inspect its prompt and bound role. Click a run to see its full LLM call timeline.</div>
       </aside>
       <section class="content pipeline-content">
+        <section id="pipeline-spec-editor" class="pipeline-spec-editor" hidden>
+          <header class="pipeline-spec-editor-head">
+            <strong>Spec editor</strong>
+            <span class="hint">Editing <code id="pipeline-spec-editor-path"></code></span>
+            <span id="pipeline-spec-editor-active" class="hint"></span>
+            <button type="button" id="pipeline-spec-editor-toggle" class="btn btn-ghost">Collapse</button>
+          </header>
+          <div class="pipeline-spec-editor-body">
+            <textarea id="pipeline-spec-editor-textarea"
+                      spellcheck="false" autocomplete="off"
+                      placeholder="phase: retrieve&#10;nodes:&#10;  - { id: in, type: Input }&#10;  - id: out&#10;    type: Output&#10;    inputs:&#10;      mode: { const: semantic_memory }&#10;      reasoning_prompt: { const: [] }&#10;      variables: { const: {} }"></textarea>
+            <div class="pipeline-spec-editor-row">
+              <label class="hint" style="flex:1;">Note:
+                <input type="text" id="pipeline-spec-editor-note" maxlength="200" placeholder="optional — what changed?">
+              </label>
+              <button type="button" id="pipeline-spec-editor-validate" class="btn">Validate</button>
+              <button type="button" id="pipeline-spec-editor-discard" class="btn btn-ghost">Discard changes</button>
+              <button type="button" id="pipeline-spec-editor-save" class="btn btn-primary">Save new version</button>
+            </div>
+            <div id="pipeline-spec-editor-status" class="hint"></div>
+          </div>
+          <details class="pipeline-spec-versions" open>
+            <summary>Version history</summary>
+            <div id="pipeline-spec-versions-list" class="pipeline-spec-versions-list">
+              <div class="hint">No versions yet — saving creates one.</div>
+            </div>
+          </details>
+        </section>
         <div id="pipeline-canvas" class="pipeline-canvas"></div>
         <div id="pipeline-empty" class="empty pipeline-empty">Loading pipeline…</div>
         <aside id="pipeline-detail" class="graph-detail-card" hidden>
