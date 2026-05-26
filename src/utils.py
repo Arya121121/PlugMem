@@ -98,7 +98,6 @@ def wrapper_call_model(
     token_usage_file=None,
     system_prompt: str = "You are a helpful assistant.",
 ) -> str:
-    model_name = 'CalamitousFelicitousness/Qwen2.5-32B-Instruct-fp8-dynamic'
     """Unified LLM caller. Two routes, picked from env:
 
       1. Azure OpenAI — when AZURE_ENDPOINT is set. Uses OPENAI_API_KEY for
@@ -295,7 +294,7 @@ def call_dpsk(prompt=None, messages=None, model_id="DeepSeek-V3-0324", temperatu
 
 
 # legacy: kept for reference; prefer wrapper_call_model
-def call_gpt(prompt=None, messages=None, model_id="CalamitousFelicitousness/Qwen2.5-32B-Instruct-fp8-dynamic", temperature=0, top_p=1.0, max_tokens=4096, token_usage_file=None, system_prompt="You are a helpful assistanct."):
+def call_gpt(prompt=None, messages=None, model_id="gpt-4o", temperature=0, top_p=1.0, max_tokens=4096, token_usage_file=None, system_prompt="You are a helpful assistanct."):
     OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
     AZURE_ENDPOINT = os.environ.get("AZURE_ENDPOINT", None)
     client = OpenAI() if not AZURE_ENDPOINT else AzureOpenAI(azure_endpoint=AZURE_ENDPOINT, api_key=OPENAI_API_KEY, api_version="2024-12-01-preview")
