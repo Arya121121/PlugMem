@@ -37,7 +37,7 @@ class MemoryGraph:
                  subgoal_relevant: ValueBase=SubgoalRelevant(), 
                  procedural_equal: ValueBase=ProceduralEqual(), 
                  procedural_relevant: ValueBase=ProceduralRelevant(),
-                 log_file: str=None
+                 log_file: str=None, load_from_disk: bool=False, refresh_embeddings: bool=False
                  ):
 
         self.tag_equal = tag_equal
