@@ -1384,6 +1384,8 @@ class MemoryGraph:
             )
         self.logger.info(f"task_type: {task_type}")
         self.logger.info(f"----- mode -----: {mode}")
+        if mode:
+            mode = mode.replace("#", "").replace("*", "").strip()
         
         if mode == "episodic_memory":
             prompt_template = DefaultEpisodicPrompt()
