@@ -919,6 +919,8 @@ class MemoryGraph:
                 prompts=self.prompts, graph_id=self.graph_id,
             )
         logger.info("mode: %s", mode)
+        if isinstance(mode, str):
+            mode = mode.replace("#", "").replace("*", "").strip()
 
         _reasoning_map = {
             "episodic_memory": ("reasoning_episodic", DefaultEpisodicPrompt),
