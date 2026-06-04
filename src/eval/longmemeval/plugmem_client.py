@@ -31,7 +31,7 @@ def _headers() -> Dict[str, str]:
 def _post(path: str, body: Dict) -> Dict:
     url = f"{_BASE_URL}/api/v1{path}"
     try:
-        r = requests.post(url, json=body, headers=_headers(), timeout=30)
+        r = requests.post(url, json=body, headers=_headers(), timeout=300)
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -211,9 +211,9 @@ class PlugMemClient:
             "max_merges_per_node":              kwargs.get("max_merges_per_node", 3),
             "max_candidates_per_tag":           kwargs.get("max_candidates_per_tag", 10),
             "max_total_candidates":             kwargs.get("max_total_candidates", 50),
-            "min_credibility_to_keep_active":   kwargs.get("min_credibility_to_keep_active", 0.1),
-            "credibility_decay":                kwargs.get("credibility_decay", 0.95),
-            "only_update_recent_window":        kwargs.get("only_update_recent_window", True),
+            "min_credibility_to_keep_active":   kwargs.get("min_credibility_to_keep_active", -10),
+            "credibility_decay":                kwargs.get("credibility_decay", 0),
+            "only_update_recent_window":        kwargs.get("only_update_recent_window", None),
             "allow_merge_with_common_episodic_nodes": kwargs.get("allow_merge_with_common_episodic_nodes", False),
         }
         return _post(f"/graphs/{self.graph_id}/consolidate", body)
