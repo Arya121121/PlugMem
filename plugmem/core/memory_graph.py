@@ -907,6 +907,9 @@ class MemoryGraph:
         mode: str = None,
         _audit: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, str]], Dict[str, Any], str]:
+        import time as time_mod
+        start_time = time_mod.perf_counter()
+
         next_subgoal, query_tags = get_plan(
             self.retrieval_llm, goal=goal, subgoal=subgoal, state=state, observation=observation,
             prompts=self.prompts, graph_id=self.graph_id,
@@ -986,6 +989,14 @@ class MemoryGraph:
             _audit["query_tags"] = list(query_tags or [])
             _audit["selected_semantic_ids"] = [n.semantic_id for n in semantic_nodes]
             _audit["selected_procedural_ids"] = [n.procedural_id for n in procedural_nodes]
+
+        # Record latency and memory retrieved
+        latency = time_mod.perf_counter() - start_time
+        from plugmem.api.logging_ctx import current_log_ctx
+        ctx = current_log_ctx.get()
+        if ctx is not None:
+            retrieved_mem = variables.get(mode, "")
+            ctx.record_retrieval(mode=mode, latency_sec=latency, retrieved_mem=retrieved_mem)
 
         return messages, variables, mode
 
@@ -1218,6 +1229,9 @@ class MemoryGraph:
         only_update_recent_window: Optional[int] = None,
         allow_merge_with_common_episodic_nodes: bool = False,
     ) -> Dict[str, int]:
+        import time as time_mod
+        start_time = time_mod.perf_counter()
+
         stats = {
             "scanned_semantic": 0,
             "skipped_inactive": 0,
@@ -1338,4 +1352,12 @@ class MemoryGraph:
                     break
 
         logger.info("Consolidation stats: %s", stats)
+
+        # Record consolidation stats to the active request context
+        latency = time_mod.perf_counter() - start_time
+        from plugmem.api.logging_ctx import current_log_ctx
+        ctx = current_log_ctx.get()
+        if ctx is not None:
+            ctx.record_consolidation(latency_sec=latency, stats=stats)
+
         return stats
