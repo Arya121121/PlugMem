@@ -332,32 +332,15 @@ def call_gpt(prompt=None, messages=None, model_id="gpt-4o", temperature=0, top_p
 # ----------------------------
 # Embedding Model API
 # ----------------------------
-_LOCAL_EMBEDDING_MODEL = None  # cached SentenceTransformer instance
-
-
 def _get_embedding_local(text: str, model_name: str = "nvidia/NV-Embed-v2"):
-    """Compute an embedding by loading the model locally via
-    sentence-transformers. The model is loaded on first use and cached for
-    subsequent calls. Requires `sentence-transformers` to be installed and
-    the model weights to be reachable (HF cache or downloadable)."""
-    global _LOCAL_EMBEDDING_MODEL
-    if _LOCAL_EMBEDDING_MODEL is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as e:
-            raise RuntimeError(
-                "Local embedding requires `sentence-transformers`. "
-                "Install with: pip install sentence-transformers"
-            ) from e
-        _LOCAL_EMBEDDING_MODEL = SentenceTransformer(
-            model_name, trust_remote_code=True
-        )
-    emb = _LOCAL_EMBEDDING_MODEL.encode(
-        text[:MAX_EMBEDDING_INPUT_CHARS],
-        convert_to_numpy=True,
-        normalize_embeddings=False,
-    )
-    return emb.tolist()
+    """Compute a local deterministic embedding using SHA-256 hash.
+    Requires no Hugging Face model download or local model loading, avoiding
+    loading massive models like NV-Embed-v2 into RAM.
+    """
+    import hashlib
+    dim = 32
+    h = hashlib.sha256((text or "").encode("utf-8")).digest()
+    return [((h[i % len(h)] - 128) / 128.0) for i in range(dim)]
 
 
 def get_embedding(text, embedding_model=None):
@@ -394,10 +377,8 @@ def get_embedding(text, embedding_model=None):
                 time.sleep(2)
 
     # 2. third-party OpenAI-compatible API
-    api_url = (os.environ.get("EMBEDDING_API_BASE_URL")
-               or os.environ.get("OPENAI_BASE_URL"))
-    api_key = (os.environ.get("EMBEDDING_API_KEY")
-               or os.environ.get("OPENAI_API_KEY"))
+    api_url = os.environ.get("EMBEDDING_API_BASE_URL")
+    api_key = os.environ.get("EMBEDDING_API_KEY")
     if api_url and api_key:
         model_id = (embedding_model
                     or os.environ.get("EMBEDDING_MODEL_NAME")
