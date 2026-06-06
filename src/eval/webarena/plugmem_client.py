@@ -114,6 +114,10 @@ class PlugMemClient:
             semantic = getattr(mem, "memory", {}).get("semantic", [])
             procedural = getattr(mem, "memory", {}).get("procedural", [])
 
+            # Normalize episodic to 2D list if it is a 1D list of dicts (HotpotQA format)
+            if episodic and isinstance(episodic, (list, tuple)) and isinstance(episodic[0], dict):
+                episodic = [episodic]
+
             # If we already have structured semantic or procedural memories, use structured mode.
             if semantic or procedural:
                 # Build episodic steps in structured format
