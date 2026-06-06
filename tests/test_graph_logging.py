@@ -25,9 +25,9 @@ def test_graph_retrieval_logging(graph_manager, fake_llm, fake_embedder):
         "turn_num": 0,
         "time": "2026-06-04",
     })
-    # FakeEmbedder.DIM is 64; provide list of 64 floats
+    # Use fake_embedder to generate a matching embedding to prevent flaky random projection failures
     mem.memory_embedding["semantic"].append({
-        "semantic_memory": [0.1] * 64,
+        "semantic_memory": fake_embedder.embed("Madrid is capital of Spain."),
         "tags": [[0.1] * 64, [0.1] * 64],
     })
     mg.insert(mem)
