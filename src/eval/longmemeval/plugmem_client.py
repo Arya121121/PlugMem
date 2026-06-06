@@ -48,6 +48,20 @@ def _get(path: str) -> Dict:
         raise RuntimeError(f"PlugMemClient GET {path} failed: {e}") from e
 
 
+class DummyRelevant:
+    def __init__(self, k: int = 5):
+        self.k = k
+
+
+class DummySemanticNode:
+    def __init__(self, semantic_id: int, text: str):
+        self.semantic_id = semantic_id
+        self.text = text
+
+    def get_semantic_memory(self) -> str:
+        return self.text
+
+
 class PlugMemClient:
     """
     HTTP wrapper around the PlugMem FastAPI server.
@@ -60,6 +74,8 @@ class PlugMemClient:
 
     def __init__(self, graph_id: str = "default", auto_create: bool = True, **kwargs):
         self.graph_id = graph_id
+        self.tag_relevant = DummyRelevant(kwargs.get("tag_relevant_k", 5))
+        self.semantic_relevant = DummyRelevant(kwargs.get("semantic_relevant_k", 5))
         if auto_create:
             self._ensure_graph()
 
@@ -229,23 +245,82 @@ class PlugMemClient:
             logger.warning("Could not fetch stats: %s", e)
             return {}
 
-    # Mimic attribute access used in print_memory_graph_stats
+    # Mimic attribute access used in print_memory_graph_stats and evaluations
     @property
-    def semantic_nodes(self) -> List:
-        return []
+    def semantic_nodes(self) -> List[DummySemanticNode]:
+        try:
+            result = _get(f"/graphs/{self.graph_id}/nodes?node_type=semantic&limit=10000")
+            nodes = result.get("nodes", [])
+            return [
+                DummySemanticNode(
+                    semantic_id=n.get("semantic_id", 0),
+                    text=n.get("semantic_memory", "")
+                )
+                for n in nodes
+            ]
+        except Exception as e:
+            logger.warning("Could not fetch semantic nodes from server: %s", e)
+            return []
 
     @property
     def episodic_nodes(self) -> List:
-        return []
+        try:
+            result = _get(f"/graphs/{self.graph_id}/stats")
+            count = result.get("episodic", 0)
+            return [None] * count
+        except Exception:
+            return []
 
     @property
     def procedural_nodes(self) -> List:
-        return []
+        try:
+            result = _get(f"/graphs/{self.graph_id}/stats")
+            count = result.get("procedural", 0)
+            return [None] * count
+        except Exception:
+            return []
 
     @property
     def tag_nodes(self) -> List:
-        return []
+        try:
+            result = _get(f"/graphs/{self.graph_id}/stats")
+            count = result.get("tag", 0)
+            return [None] * count
+        except Exception:
+            return []
 
     @property
     def subgoal_nodes(self) -> List:
-        return []
+        try:
+            result = _get(f"/graphs/{self.graph_id}/stats")
+            count = result.get("subgoal", 0)
+            return [None] * count
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
+    # Compatibility interface methods
+    # ------------------------------------------------------------------
+
+    def insert_hpqa_ver(self, mem) -> None:
+        """Alias for insert, mapping to HotpotQA evaluation interface."""
+        self.insert(mem)
+
+    def build_mem_from_disk_hpqa_ver(self, dir_path: str) -> None:
+        """No-op on the server since data is already loaded and persistent."""
+        logger.info("Server-based run: build_mem_from_disk_hpqa_ver is a no-op")
+        pass
+
+    def build_mem_from_disk_lme_ver(self, file_path: str) -> None:
+        """No-op on the server since data is already loaded and persistent."""
+        logger.info("Server-based run: build_mem_from_disk_lme_ver is a no-op")
+        pass
+
+    def build_mem_from_disk_webarena_ver(self, dir_path: str, **kwargs) -> None:
+        """No-op on the server since data is already loaded and persistent."""
+        logger.info("Server-based run: build_mem_from_disk_webarena_ver is a no-op")
+        pass
+
+    def return_logger(self) -> logging.Logger:
+        """Returns standard logger matching MemoryGraph interface."""
+        return logging.getLogger("plugmem_client")
