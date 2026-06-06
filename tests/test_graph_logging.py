@@ -39,7 +39,7 @@ def test_graph_retrieval_logging(graph_manager, fake_llm, fake_embedder):
     try:
         messages, variables, mode = mg.retrieve_memory(
             goal="Locate capital",
-            observation="What is the capital of Spain?",
+            observation="Madrid is capital of Spain.",
             task_type="qa",
         )
 

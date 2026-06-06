@@ -334,6 +334,7 @@ class MemoryGraph:
                     reward=step.get("reward", "") if isinstance(step, dict) else "",
                 )
                 self.episodic_nodes.append(epis_node)
+                self.episodic_id2node[epis_id] = epis_node
                 episodic_nodes[i].append(epis_node)
                 if sid is not None:
                     self.session_ids.setdefault(sid, []).append(epis_node)
@@ -412,6 +413,7 @@ class MemoryGraph:
 
             sem_node.tags = list(set(sem_node.tags))
             self.semantic_nodes.append(sem_node)
+            self.semantic_id2node[sem_id] = sem_node
             curr_sem_nodes.append(sem_node)
             self.semantic_time += 1
 
@@ -488,6 +490,7 @@ class MemoryGraph:
             proc_node.subgoal_nodes.append(subgoal_node)
             proc_node.subgoals.append(subgoal_node.subgoal)
             self.procedural_nodes.append(proc_node)
+            self.procedural_id2node[proc_id] = proc_node
 
             # Persist
             sg_emb = subgoal_node.embedding
