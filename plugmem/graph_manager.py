@@ -47,6 +47,7 @@ class GraphManager:
         if graph_id is None:
             graph_id = uuid.uuid4().hex[:12]
 
+        exists = self._storage.graph_exists(graph_id)
         self._storage.create_graph(graph_id)
         graph = MemoryGraph(
             graph_id=graph_id,
@@ -54,6 +55,8 @@ class GraphManager:
             llm=self._llm,
             embedder=self._embedder,
         )
+        if exists:
+            graph.load()
         self._graphs[graph_id] = graph
         return graph_id
 
