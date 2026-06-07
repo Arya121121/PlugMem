@@ -22,7 +22,11 @@ sys.path.append(parent_dir)
 
 from memory_structuring.memory import Memory
 from memory_structuring.structuring_inference import get_semantic, get_procedural
-from memory_retrieving.memory_graph import MemoryGraph
+import os
+if os.environ.get("PLUGMEM_API_URL"):
+    from plugmem_client import PlugMemClient as MemoryGraph
+else:
+    from memory_retrieving.memory_graph import MemoryGraph
 from memory_retrieving.value_longmemeval import (
     TagEqual, TagRelevant, SemanticEqual, SemanticRelevant,
     SubgoalEqual, SubgoalRelevant, ProceduralEqual, ProceduralRelevant

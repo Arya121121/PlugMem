@@ -18,7 +18,11 @@ sys.path.append(parent_dir)
 from utils import wrapper_call_model,load_json,dump_json
 from utils import DEFAULT_LLM_NAME, DEFAULT_EMBEDDING_MODEL_NAME
 from prompt_base import PromptBase, ChatMessage
-from memory_retrieving.memory_graph import MemoryGraph
+import os
+if os.environ.get("PLUGMEM_API_URL"):
+    from plugmem_client import PlugMemClient as MemoryGraph
+else:
+    from memory_retrieving.memory_graph import MemoryGraph
 from memory_retrieving.value_longmemeval import TagEqual, TagRelevant, SemanticEqual, SemanticRelevant
 from memory_reasoning.prompt_reasoning import DefaultSemanticPrompt
 from funcs_eval import (
