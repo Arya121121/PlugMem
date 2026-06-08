@@ -74,9 +74,19 @@ class PlugMemClient:
 
     def __init__(self, graph_id: str = "default", auto_create: bool = True, log_file: Optional[str] = None, **kwargs):
         self.graph_id = graph_id
-        self.tag_relevant = DummyRelevant(kwargs.get("tag_relevant_k", 5))
-        self.semantic_relevant = DummyRelevant(kwargs.get("semantic_relevant_k", 5))
         
+        tag_rel = kwargs.get("tag_relevant")
+        if tag_rel is not None:
+            self.tag_relevant = tag_rel
+        else:
+            self.tag_relevant = DummyRelevant(kwargs.get("tag_relevant_k", 5))
+
+        sem_rel = kwargs.get("semantic_relevant")
+        if sem_rel is not None:
+            self.semantic_relevant = sem_rel
+        else:
+            self.semantic_relevant = DummyRelevant(kwargs.get("semantic_relevant_k", 5))
+
         if log_file:
             try:
                 from utils import set_logger
@@ -222,6 +232,15 @@ class PlugMemClient:
             "min_confidence": min_confidence,
             "source_in": source_in,
         }
+        if hasattr(self.tag_relevant, "k"):
+            body["tag_k"] = getattr(self.tag_relevant, "k")
+        if hasattr(self.tag_relevant, "value_threshold"):
+            body["tag_threshold"] = getattr(self.tag_relevant, "value_threshold")
+        if hasattr(self.semantic_relevant, "k"):
+            body["semantic_k"] = getattr(self.semantic_relevant, "k")
+        if hasattr(self.semantic_relevant, "value_threshold"):
+            body["semantic_threshold"] = getattr(self.semantic_relevant, "value_threshold")
+
         result = _post(f"/graphs/{self.graph_id}/retrieve", body)
         messages  = result.get("reasoning_prompt", [])
         variables = result.get("variables", {})

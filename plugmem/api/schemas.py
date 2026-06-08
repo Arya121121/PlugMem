@@ -108,6 +108,10 @@ class RetrieveRequest(BaseModel):
         None,
         description="If set, the recall is logged against this session id.",
     )
+    tag_k: Optional[int] = None
+    tag_threshold: Optional[float] = None
+    semantic_k: Optional[int] = None
+    semantic_threshold: Optional[float] = None
 
 
 class RetrieveResponse(BaseModel):
@@ -128,6 +132,10 @@ class ReasonRequest(BaseModel):
         None,
         description="If set, the reasoning recall is logged against this session id.",
     )
+    tag_k: Optional[int] = None
+    tag_threshold: Optional[float] = None
+    semantic_k: Optional[int] = None
+    semantic_threshold: Optional[float] = None
 
 
 class ReasonResponse(BaseModel):

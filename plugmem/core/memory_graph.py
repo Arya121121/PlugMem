@@ -908,6 +908,8 @@ class MemoryGraph:
         time: str = "",
         task_type: str = "",
         mode: str = None,
+        tag_relevant: Optional[ValueBase] = None,
+        semantic_relevant: Optional[ValueBase] = None,
         _audit: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, str]], Dict[str, Any], str]:
         import time as time_mod
@@ -943,8 +945,8 @@ class MemoryGraph:
         if mode in ["semantic_memory", "episodic_memory"]:
             semantic_nodes = self.retrieve_semantic_nodes(
                 semantic_memory={"semantic_memory": observation, "tags": query_tags},
-                value_func_tag=self.tag_relevant,
-                value_func=self.semantic_relevant,
+                value_func_tag=tag_relevant if tag_relevant is not None else self.tag_relevant,
+                value_func=semantic_relevant if semantic_relevant is not None else self.semantic_relevant,
             )
         if mode in ["procedural_memory", "episodic_memory"]:
             procedural_nodes = self.retrieve_procedural_nodes(
@@ -964,7 +966,7 @@ class MemoryGraph:
                 semantic_memory_str = "No relevant fact"
             else:
                 for i, sn in enumerate(semantic_nodes):
-                    semantic_memory_str += f"Fact {i}: {sn.get_semantic_memory()}\n"
+                    semantic_memory_str += f"Fact {i} (Sem Node {sn.semantic_id}): {sn.get_semantic_memory()}\n"
         elif mode == "procedural_memory":
             if not procedural_nodes:
                 procedural_memory_str = "No relevant experiences"
@@ -1100,7 +1102,7 @@ class MemoryGraph:
                 semantic_memory_str = "No relevant fact"
             else:
                 semantic_memory_str = "".join(
-                    f"Fact {i}: {n.get_semantic_memory()}\n"
+                    f"Fact {i} (Sem Node {n.semantic_id}): {n.get_semantic_memory()}\n"
                     for i, n in enumerate(semantic_nodes)
                 )
         elif mode == "procedural_memory":
