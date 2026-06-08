@@ -76,6 +76,9 @@ def migrate_longmemeval(
         embedding = _to_float_list(item.get("semantic_embedding"))
         if embedding is None and text:
             embedding = embedder.embed(text)
+        epis_ids = item.get("episodic_nodes", [])
+        if not epis_ids:
+            epis_ids = item.get("episodic_ids", [item["episodic_id"]] if "episodic_id" in item else [])
         storage.add_semantic(
             graph_id,
             semantic_id=item["semantic_id"],
@@ -83,7 +86,7 @@ def migrate_longmemeval(
             embedding=embedding,
             tags=item.get("tags", []),
             time=item.get("time", 0),
-            episodic_ids=item.get("episodic_nodes", []),
+            episodic_ids=epis_ids,
             session_id=item.get("session_id"),
             date=item.get("date", ""),
         )
@@ -196,7 +199,7 @@ def migrate_hpqa_dir(
                 tag_ids=item.get("tag_ids", []),
                 time=item.get("time", 0),
                 is_active=item.get("is_active", True),
-                episodic_ids=item.get("episodic_ids", []),
+                episodic_ids=item.get("episodic_ids", [item["episodic_id"]] if "episodic_id" in item else []),
                 bro_semantic_ids=item.get("bro_semantic_ids", []),
                 son_semantic_ids=item.get("son_semantic_ids", []),
             )
@@ -260,7 +263,7 @@ def migrate_hpqa_dir(
                 embedding=embedding,
                 subgoal=item.get("subgoal", ""),
                 subgoal_id=item.get("subgoal_id"),
-                episodic_ids=item.get("episodic_ids", []),
+                episodic_ids=item.get("episodic_ids", [item["episodic_id"]] if "episodic_id" in item else []),
                 time=item.get("time", 0),
                 return_value=float(item.get("return", 0.0)),
             )
@@ -324,7 +327,7 @@ def migrate_webarena_dir(
                 embedding=embedding,
                 tags=tags,
                 time=item.get("time", 0),
-                episodic_ids=item.get("episodic_ids", []),
+                episodic_ids=item.get("episodic_ids", [item["episodic_id"]] if "episodic_id" in item else []),
                 bro_semantic_ids=item.get("bro_semantic_ids", []),
             )
             stats["semantic"] += 1
@@ -364,7 +367,7 @@ def migrate_webarena_dir(
                 embedding=embedding,
                 subgoal=item.get("subgoal", ""),
                 subgoal_id=item.get("subgoal_id"),
-                episodic_ids=item.get("episodic_ids", []),
+                episodic_ids=item.get("episodic_ids", [item["episodic_id"]] if "episodic_id" in item else []),
                 time=item.get("time", 0),
                 return_value=float(item.get("return", 0.0)),
             )
@@ -372,3 +375,41 @@ def migrate_webarena_dir(
 
     logger.info("Migrated WebArena dir %s -> graph %s: %s", dir_path, graph_id, stats)
     return stats
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    from plugmem.api.dependencies import get_graph_manager
+
+    # Configure logging
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
+
+    parser = argparse.ArgumentParser(description="Migrate existing memory graphs to ChromaDB server.")
+    parser.add_argument("--format", required=True, choices=["hpqa", "longmemeval", "webarena"], help="Source format to migrate from.")
+    parser.add_argument("--path", required=True, help="Path to the JSON file or directory containing the graph nodes.")
+    parser.add_argument("--graph_id", default="default", help="Graph ID to register under in the server.")
+
+    args = parser.parse_args()
+
+    try:
+        manager = get_graph_manager()
+        storage = manager.storage
+        embedder = manager.embedder
+
+        if args.format == "hpqa":
+            stats = migrate_hpqa_dir(args.path, args.graph_id, storage, embedder)
+        elif args.format == "longmemeval":
+            stats = migrate_longmemeval(args.path, args.graph_id, storage, embedder)
+        elif args.format == "webarena":
+            stats = migrate_webarena_dir(args.path, args.graph_id, storage, embedder)
+        else:
+            print(f"Error: Unknown format '{args.format}'", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Migration completed successfully under graph_id='{args.graph_id}'. Stats: {stats}")
+    except Exception as e:
+        print(f"Migration failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

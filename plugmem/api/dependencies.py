@@ -98,6 +98,12 @@ def get_embedder(config: PlugMemConfig | None = None) -> EmbeddingClient:
     cfg = config or get_config()
     openai_key = os.getenv("OPENAI_API_KEY", "")
 
+    if cfg.embedding_model == "nvidia/NV-Embed-v2" and not cfg.embedding_base_url:
+        raise ValueError(
+            "Server is configured to use 'nvidia/NV-Embed-v2' but EMBEDDING_BASE_URL is not set. "
+            "Please set EMBEDDING_BASE_URL to point to your NV-Embed-v2 embedding server to prevent silent degradation or dimension mismatches."
+        )
+
     if cfg.embedding_base_url:
         _embedding_client = HTTPEmbeddingClient(
             base_url=cfg.embedding_base_url,

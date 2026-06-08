@@ -972,7 +972,7 @@ class MemoryGraph:
                 procedural_memory_str = "No relevant experiences"
             else:
                 for i, pn in enumerate(procedural_nodes):
-                    procedural_memory_str += f"Experience {i}: {pn.get_procedural_memory()}\n"
+                    procedural_memory_str += f"Experience {i} (Proc Node {pn.procedural_id}): {pn.get_procedural_memory()}\n"
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1110,7 +1110,7 @@ class MemoryGraph:
                 procedural_memory_str = "No relevant experiences"
             else:
                 procedural_memory_str = "".join(
-                    f"Experience {i}: {n.get_procedural_memory()}\n"
+                    f"Experience {i} (Proc Node {n.procedural_id}): {n.get_procedural_memory()}\n"
                     for i, n in enumerate(procedural_nodes)
                 )
 
