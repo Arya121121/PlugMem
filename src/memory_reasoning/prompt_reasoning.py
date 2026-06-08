@@ -25,9 +25,7 @@ class DefaultSemanticPrompt(PromptBase):
         )
         user_template = (
             'I will give you several retrieved facts. Extract all the useful information relevant to the question. \n'
-            'In the output reasoning information, use the original wording from the retrieved facts as much as possible, and do not replace it with synonyms or near-synonyms.'
-            'If no useful information found, just return "null".\n'
-            # 'If no useful information is found, just concatenate all the facts as the output, like: Fact 0: <fact> \\nFact 1: <fact> \\n...)\n'
+            'In the output reasoning information, use the original wording from the retrieved facts as much as possible, and do not replace it with synonyms or near-synonyms.\n'
             'Output format:\n'
             '---\n'
             '### Reasoning\n'

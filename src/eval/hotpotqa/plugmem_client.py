@@ -72,10 +72,18 @@ class PlugMemClient:
         - get_stats()
     """
 
-    def __init__(self, graph_id: str = "default", auto_create: bool = True, **kwargs):
+    def __init__(self, graph_id: str = "default", auto_create: bool = True, log_file: Optional[str] = None, **kwargs):
         self.graph_id = graph_id
         self.tag_relevant = DummyRelevant(kwargs.get("tag_relevant_k", 5))
         self.semantic_relevant = DummyRelevant(kwargs.get("semantic_relevant_k", 5))
+        
+        if log_file:
+            try:
+                from utils import set_logger
+                set_logger(log_file)
+            except ImportError:
+                pass
+
         if auto_create:
             self._ensure_graph()
 
