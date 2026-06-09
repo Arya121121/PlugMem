@@ -73,7 +73,10 @@ class PlugMemClient:
     """
 
     def __init__(self, graph_id: str = "default", auto_create: bool = True, log_file: Optional[str] = None, **kwargs):
-        self.graph_id = graph_id
+        if graph_id == "default":
+            self.graph_id = os.environ.get("PLUGMEM_GRAPH_ID", "default")
+        else:
+            self.graph_id = graph_id
         
         tag_rel = kwargs.get("tag_relevant")
         if tag_rel is not None:
