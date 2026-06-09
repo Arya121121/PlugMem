@@ -28,10 +28,10 @@ def _headers() -> Dict[str, str]:
     return h
 
 
-def _post(path: str, body: Dict) -> Dict:
+def _post(path: str, body: Dict, timeout: Optional[int] = 300) -> Dict:
     url = f"{_BASE_URL}/api/v1{path}"
     try:
-        r = requests.post(url, json=body, headers=_headers(), timeout=300)
+        r = requests.post(url, json=body, headers=_headers(), timeout=timeout)
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -263,7 +263,7 @@ class PlugMemClient:
             "only_update_recent_window":        kwargs.get("only_update_recent_window", None),
             "allow_merge_with_common_episodic_nodes": kwargs.get("allow_merge_with_common_episodic_nodes", False),
         }
-        return _post(f"/graphs/{self.graph_id}/consolidate", body)
+        return _post(f"/graphs/{self.graph_id}/consolidate", body, timeout=None)
 
     # ------------------------------------------------------------------
     # Stats (used by print_memory_graph_stats)
