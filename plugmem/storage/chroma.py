@@ -143,7 +143,7 @@ class ChromaStorage:
             embedding_function=self._embedding_fn,
         )
 
-    def _get_all_paginated(self, col, include: List[str], batch_size: int = 10000) -> Dict[str, list]:
+    def _get_all_paginated(self, col, include: List[str], batch_size: int = 500) -> Dict[str, list]:
         """Fetch all items from a collection in pages to avoid SQLite variable limits."""
         offset = 0
         all_data = {k: [] for k in include}
