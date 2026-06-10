@@ -143,6 +143,25 @@ class ChromaStorage:
             embedding_function=self._embedding_fn,
         )
 
+    def _get_all_paginated(self, col, include: List[str], batch_size: int = 10000) -> Dict[str, list]:
+        """Fetch all items from a collection in pages to avoid SQLite variable limits."""
+        offset = 0
+        all_data = {k: [] for k in include}
+        all_data["ids"] = []
+        while True:
+            batch = col.get(include=include, limit=batch_size, offset=offset)
+            if not batch.get("ids"):
+                break
+            all_data["ids"].extend(batch["ids"])
+            for k in include:
+                if batch.get(k) is not None:
+                    all_data[k].extend(batch[k])
+                else:
+                    all_data[k].extend([None] * len(batch["ids"]))
+            if len(batch["ids"]) < batch_size:
+                break
+            offset += batch_size
+        return all_data
     # ------------------------------------------------------------------ #
     # Episodic nodes
     # ------------------------------------------------------------------ #
@@ -235,7 +254,7 @@ class ChromaStorage:
 
     def get_all_episodic(self, graph_id: str) -> Dict:
         col = self._col(graph_id, "episodic")
-        return col.get(include=["documents", "metadatas"])
+        return self._get_all_paginated(col, include=["documents", "metadatas"])
 
     # ------------------------------------------------------------------ #
     # Semantic nodes
@@ -377,7 +396,7 @@ class ChromaStorage:
 
     def get_all_semantic(self, graph_id: str) -> Dict:
         col = self._col(graph_id, "semantic")
-        return col.get(include=["documents", "metadatas", "embeddings"])
+        return self._get_all_paginated(col, include=["documents", "metadatas", "embeddings"])
 
     # ------------------------------------------------------------------ #
     # Tag nodes
@@ -483,7 +502,7 @@ class ChromaStorage:
 
     def get_all_tags(self, graph_id: str) -> Dict:
         col = self._col(graph_id, "tag")
-        return col.get(include=["documents", "metadatas", "embeddings"])
+        return self._get_all_paginated(col, include=["documents", "metadatas", "embeddings"])
 
     # ------------------------------------------------------------------ #
     # Subgoal nodes
@@ -585,7 +604,7 @@ class ChromaStorage:
 
     def get_all_subgoals(self, graph_id: str) -> Dict:
         col = self._col(graph_id, "subgoal")
-        return col.get(include=["documents", "metadatas", "embeddings"])
+        return self._get_all_paginated(col, include=["documents", "metadatas", "embeddings"])
 
     # ------------------------------------------------------------------ #
     # Procedural nodes
@@ -707,7 +726,7 @@ class ChromaStorage:
 
     def get_all_procedural(self, graph_id: str) -> Dict:
         col = self._col(graph_id, "procedural")
-        return col.get(include=["documents", "metadatas", "embeddings"])
+        return self._get_all_paginated(col, include=["documents", "metadatas", "embeddings"])
 
     # ------------------------------------------------------------------ #
     # Recall audit log
