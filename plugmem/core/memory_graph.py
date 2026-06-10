@@ -191,6 +191,8 @@ class MemoryGraph:
                 credibility=meta.get("credibility", 10),
             )
             node.tags = _deserialize_list(meta.get("tags", "[]"))
+            node._temp_episodic_ids = _deserialize_list(meta.get("episodic_ids", "[]"))
+            node._temp_bro_ids = _deserialize_list(meta.get("bro_semantic_ids", "[]"))
             self.semantic_nodes.append(node)
             self.semantic_time = max(self.semantic_time, _time + 1)
 
@@ -207,6 +209,7 @@ class MemoryGraph:
                 time=meta.get("time", 0),
                 importance=meta.get("importance", 1),
             )
+            node._temp_semantic_ids = _deserialize_list(meta.get("semantic_ids", "[]"))
             self.tag_nodes.append(node)
 
     def _load_subgoal_nodes(self) -> None:
@@ -221,6 +224,7 @@ class MemoryGraph:
                 embedding=emb,
                 time=meta.get("time", 0),
             )
+            node._temp_procedural_ids = _deserialize_list(meta.get("procedural_ids", "[]"))
             self.subgoal_nodes.append(node)
 
     def _load_procedural_nodes(self) -> None:
@@ -237,6 +241,7 @@ class MemoryGraph:
                 return_value=meta.get("return", 0.0),
                 session_id=meta.get("session_id"),
             )
+            node._temp_episodic_ids = _deserialize_list(meta.get("episodic_ids", "[]"))
             self.procedural_nodes.append(node)
             self.procedural_time = max(self.procedural_time, node.time + 1)
 
@@ -255,34 +260,37 @@ class MemoryGraph:
         epis_id2node = self.episodic_id2node
 
         # Link semantic -> episodic
-        sem_data = self.storage.get_all_semantic(self.graph_id)
-        for meta, sem_node in zip(sem_data.get("metadatas", []), self.semantic_nodes):
-            episodic_ids = _deserialize_list(meta.get("episodic_ids", "[]"))
+        for sem_node in self.semantic_nodes:
+            episodic_ids = getattr(sem_node, "_temp_episodic_ids", [])
             for eid in episodic_ids:
                 epis_node = epis_id2node.get(eid)
                 if epis_node is not None:
                     sem_node.episodic_nodes.append(epis_node)
-            bro_ids = _deserialize_list(meta.get("bro_semantic_ids", "[]"))
+            bro_ids = getattr(sem_node, "_temp_bro_ids", [])
             for bid in bro_ids:
                 bro_node = sem_id2node.get(bid)
                 if bro_node is not None:
                     sem_node.bro_semantic_nodes.append(bro_node)
+            if hasattr(sem_node, "_temp_episodic_ids"):
+                delattr(sem_node, "_temp_episodic_ids")
+            if hasattr(sem_node, "_temp_bro_ids"):
+                delattr(sem_node, "_temp_bro_ids")
 
         # Link tags <-> semantics
-        tag_data = self.storage.get_all_tags(self.graph_id)
-        for meta, tag_node in zip(tag_data.get("metadatas", []), self.tag_nodes):
-            semantic_ids = _deserialize_list(meta.get("semantic_ids", "[]"))
+        for tag_node in self.tag_nodes:
+            semantic_ids = getattr(tag_node, "_temp_semantic_ids", [])
             for sid in semantic_ids:
                 sem_node = sem_id2node.get(sid)
                 if sem_node is not None:
                     tag_node.semantic_nodes.append(sem_node)
                     if tag_node not in sem_node.tag_nodes:
                         sem_node.tag_nodes.append(tag_node)
+            if hasattr(tag_node, "_temp_semantic_ids"):
+                delattr(tag_node, "_temp_semantic_ids")
 
         # Link subgoals -> procedurals
-        sg_data = self.storage.get_all_subgoals(self.graph_id)
-        for meta, sg_node in zip(sg_data.get("metadatas", []), self.subgoal_nodes):
-            proc_ids = _deserialize_list(meta.get("procedural_ids", "[]"))
+        for sg_node in self.subgoal_nodes:
+            proc_ids = getattr(sg_node, "_temp_procedural_ids", [])
             for pid in proc_ids:
                 proc_node = self.procedural_id2node.get(pid)
                 if proc_node is not None:
@@ -291,15 +299,18 @@ class MemoryGraph:
                         proc_node.subgoal_nodes.append(sg_node)
             if sg_node.procedural_nodes:
                 sg_node.activate = True
+            if hasattr(sg_node, "_temp_procedural_ids"):
+                delattr(sg_node, "_temp_procedural_ids")
 
         # Link procedurals -> episodics
-        proc_data = self.storage.get_all_procedural(self.graph_id)
-        for meta, proc_node in zip(proc_data.get("metadatas", []), self.procedural_nodes):
-            episodic_ids = _deserialize_list(meta.get("episodic_ids", "[]"))
+        for proc_node in self.procedural_nodes:
+            episodic_ids = getattr(proc_node, "_temp_episodic_ids", [])
             for eid in episodic_ids:
                 epis_node = epis_id2node.get(eid)
                 if epis_node is not None:
                     proc_node.episodic_nodes.append(epis_node)
+            if hasattr(proc_node, "_temp_episodic_ids"):
+                delattr(proc_node, "_temp_episodic_ids")
 
     # ------------------------------------------------------------------ #
     # Unified insert
