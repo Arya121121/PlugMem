@@ -182,6 +182,50 @@ class ChromaStorage:
             kwargs["embeddings"] = [_to_list(embedding)]
         col.add(**kwargs)
 
+    def add_episodic_batch(self, graph_id: str, nodes: List[Dict[str, Any]]) -> None:
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+        has_embeddings = False
+        for node in nodes:
+            episodic_id = node["episodic_id"]
+            observation = node.get("observation", "")
+            action = node.get("action", "")
+            time = node.get("time", "")
+            session_id = node.get("session_id")
+            subgoal = node.get("subgoal", "")
+            state = node.get("state", "")
+            reward = node.get("reward", "")
+            embedding = node.get("embedding")
+            doc = f"{observation}\n{action}" if observation or action else ""
+            metadata = {
+                "episodic_id": episodic_id,
+                "observation": observation,
+                "action": action,
+                "time": str(time),
+                "subgoal": subgoal,
+                "state": state,
+                "reward": reward,
+            }
+            if session_id is not None:
+                metadata["session_id"] = session_id
+            ids.append(str(episodic_id))
+            documents.append(doc)
+            metadatas.append(metadata)
+            embeddings.append(embedding)
+            if embedding is not None:
+                has_embeddings = True
+        col = self._col(graph_id, "episodic")
+        kwargs: Dict[str, Any] = {
+            "ids": ids,
+            "documents": documents,
+            "metadatas": metadatas,
+        }
+        if has_embeddings:
+            kwargs["embeddings"] = [_to_list(e) if e is not None else [0.0]*4096 for e in embeddings]
+        col.add(**kwargs)
+
     def get_episodic(self, graph_id: str, episodic_id: int) -> Optional[Dict]:
         col = self._col(graph_id, "episodic")
         result = col.get(ids=[str(episodic_id)], include=["documents", "metadatas"])
@@ -237,6 +281,56 @@ class ChromaStorage:
         }
         if embedding is not None:
             kwargs["embeddings"] = [_to_list(embedding)]
+        col.add(**kwargs)
+
+    def add_semantic_batch(self, graph_id: str, nodes: List[Dict[str, Any]]) -> None:
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+        has_embeddings = False
+        for node in nodes:
+            semantic_id = node["semantic_id"]
+            text = node["text"]
+            embedding = node.get("embedding")
+            tags = node.get("tags")
+            tag_ids = node.get("tag_ids")
+            time = node.get("time", 0)
+            is_active = node.get("is_active", True)
+            episodic_ids = node.get("episodic_ids")
+            bro_semantic_ids = node.get("bro_semantic_ids")
+            son_semantic_ids = node.get("son_semantic_ids")
+            session_id = node.get("session_id")
+            credibility = node.get("credibility", 10)
+            date = node.get("date", "")
+            metadata = {
+                "semantic_id": semantic_id,
+                "tags": _serialize_list(tags or []),
+                "tag_ids": _serialize_list(tag_ids or []),
+                "time": time,
+                "is_active": is_active,
+                "episodic_ids": _serialize_list(episodic_ids or []),
+                "bro_semantic_ids": _serialize_list(bro_semantic_ids or []),
+                "son_semantic_ids": _serialize_list(son_semantic_ids or []),
+                "credibility": credibility,
+                "date": date,
+            }
+            if session_id is not None:
+                metadata["session_id"] = session_id
+            ids.append(str(semantic_id))
+            documents.append(text)
+            metadatas.append(metadata)
+            embeddings.append(embedding)
+            if embedding is not None:
+                has_embeddings = True
+        col = self._col(graph_id, "semantic")
+        kwargs: Dict[str, Any] = {
+            "ids": ids,
+            "documents": documents,
+            "metadatas": metadatas,
+        }
+        if has_embeddings:
+            kwargs["embeddings"] = [_to_list(e) if e is not None else [0.0]*4096 for e in embeddings]
         col.add(**kwargs)
 
     def update_semantic(
@@ -315,6 +409,41 @@ class ChromaStorage:
             kwargs["embeddings"] = [_to_list(embedding)]
         col.add(**kwargs)
 
+    def add_tag_batch(self, graph_id: str, nodes: List[Dict[str, Any]]) -> None:
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+        has_embeddings = False
+        for node in nodes:
+            tag_id = node["tag_id"]
+            tag = node["tag"]
+            embedding = node.get("embedding")
+            semantic_ids = node.get("semantic_ids")
+            time = node.get("time", 0)
+            importance = node.get("importance", 1)
+            metadata = {
+                "tag_id": tag_id,
+                "semantic_ids": _serialize_list(semantic_ids or []),
+                "time": time,
+                "importance": importance,
+            }
+            ids.append(str(tag_id))
+            documents.append(tag)
+            metadatas.append(metadata)
+            embeddings.append(embedding)
+            if embedding is not None:
+                has_embeddings = True
+        col = self._col(graph_id, "tag")
+        kwargs: Dict[str, Any] = {
+            "ids": ids,
+            "documents": documents,
+            "metadatas": metadatas,
+        }
+        if has_embeddings:
+            kwargs["embeddings"] = [_to_list(e) if e is not None else [0.0]*4096 for e in embeddings]
+        col.add(**kwargs)
+
     def update_tag(
         self,
         graph_id: str,
@@ -382,6 +511,39 @@ class ChromaStorage:
         }
         if embedding is not None:
             kwargs["embeddings"] = [_to_list(embedding)]
+        col.add(**kwargs)
+
+    def add_subgoal_batch(self, graph_id: str, nodes: List[Dict[str, Any]]) -> None:
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+        has_embeddings = False
+        for node in nodes:
+            subgoal_id = node["subgoal_id"]
+            subgoal = node["subgoal"]
+            embedding = node.get("embedding")
+            procedural_ids = node.get("procedural_ids")
+            time = node.get("time", 0)
+            metadata = {
+                "subgoal_id": subgoal_id,
+                "procedural_ids": _serialize_list(procedural_ids or []),
+                "time": time,
+            }
+            ids.append(str(subgoal_id))
+            documents.append(subgoal)
+            metadatas.append(metadata)
+            embeddings.append(embedding)
+            if embedding is not None:
+                has_embeddings = True
+        col = self._col(graph_id, "subgoal")
+        kwargs: Dict[str, Any] = {
+            "ids": ids,
+            "documents": documents,
+            "metadatas": metadatas,
+        }
+        if has_embeddings:
+            kwargs["embeddings"] = [_to_list(e) if e is not None else [0.0]*4096 for e in embeddings]
         col.add(**kwargs)
 
     def update_subgoal(
@@ -461,6 +623,49 @@ class ChromaStorage:
         }
         if embedding is not None:
             kwargs["embeddings"] = [_to_list(embedding)]
+        col.add(**kwargs)
+
+    def add_procedural_batch(self, graph_id: str, nodes: List[Dict[str, Any]]) -> None:
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+        has_embeddings = False
+        for node in nodes:
+            procedural_id = node["procedural_id"]
+            text = node["text"]
+            embedding = node.get("embedding")
+            subgoal = node.get("subgoal", "")
+            subgoal_id = node.get("subgoal_id")
+            episodic_ids = node.get("episodic_ids")
+            time = node.get("time", 0)
+            return_value = node.get("return_value", 0.0)
+            session_id = node.get("session_id")
+            metadata = {
+                "procedural_id": procedural_id,
+                "subgoal": subgoal,
+                "time": time,
+                "return": return_value,
+                "episodic_ids": _serialize_list(episodic_ids or []),
+            }
+            if subgoal_id is not None:
+                metadata["subgoal_id"] = subgoal_id
+            if session_id is not None:
+                metadata["session_id"] = session_id
+            ids.append(str(procedural_id))
+            documents.append(text)
+            metadatas.append(metadata)
+            embeddings.append(embedding)
+            if embedding is not None:
+                has_embeddings = True
+        col = self._col(graph_id, "procedural")
+        kwargs: Dict[str, Any] = {
+            "ids": ids,
+            "documents": documents,
+            "metadatas": metadatas,
+        }
+        if has_embeddings:
+            kwargs["embeddings"] = [_to_list(e) if e is not None else [0.0]*4096 for e in embeddings]
         col.add(**kwargs)
 
     def update_procedural(
