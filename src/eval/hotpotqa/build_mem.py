@@ -95,7 +95,7 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
     return idx, None
 
 
-def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: int,from_disk_only: bool, num_workers: int = 4, chunk_size: int = 50):
+def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: Optional[int],from_disk_only: bool, num_workers: int = 4, chunk_size: int = 50):
     if from_disk_only:
         if DIR_PATH is None:
             raise ValueError("DIR_PATH environment variable is not set.")
@@ -104,7 +104,10 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: int,from_disk_only: 
     
     # Load corpus
     with open(corpus_path, "r", encoding="utf-8") as f:
-        corpus = json.load(f)[start_idx:end_idx + 1]
+        corpus_data = json.load(f)
+    if end_idx is None or end_idx < 0:
+        end_idx = len(corpus_data) - 1
+    corpus = corpus_data[start_idx:end_idx + 1]
     
     # Load existing memory graph from disk
     mg.build_mem_from_disk_hpqa_ver(DIR_PATH)
@@ -166,7 +169,7 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: int,from_disk_only: 
 
 
 
-def main( mg: MemoryGraph, start_idx: int, end_idx: int, from_disk_only: bool) -> None:
+def main( mg: MemoryGraph, start_idx: int, end_idx: Optional[int], from_disk_only: bool) -> None:
     if from_disk_only:
         if DIR_PATH is None:
             raise ValueError("DIR_PATH environment variable is not set.")
@@ -175,7 +178,10 @@ def main( mg: MemoryGraph, start_idx: int, end_idx: int, from_disk_only: bool) -
     
     # Load corpus
     with open(corpus_path, "r", encoding="utf-8") as f:
-        corpus = json.load(f)[start_idx:end_idx + 1]
+        corpus_data = json.load(f)
+    if end_idx is None or end_idx < 0:
+        end_idx = len(corpus_data) - 1
+    corpus = corpus_data[start_idx:end_idx + 1]
     
     # Load existing memory graph from disk
     mg.build_mem_from_disk_hpqa_ver(DIR_PATH)
@@ -224,7 +230,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--bench_name", type=str, default="hotpotqa",)
     parser.add_argument("--start_idx", type=int, default=0,)
-    parser.add_argument("--end_idx", type=int, default=9,)
+    parser.add_argument("--end_idx", type=int, default=None,
+                        help="Last index of corpus to process (defaults to the end of the corpus if omitted)")
     parser.add_argument("--num_workers", type=int, default=8,)
     parser.add_argument("--chunk_size", type=int, default=30,)
     parser.add_argument("--emb_model", type=str, default="NV-Embed-v2",
