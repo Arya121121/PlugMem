@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, "../.."))
 sys.path.append(parent_dir)
+sys.path.append(current_dir)
 
 from memory_structuring.memory import Memory
 from memory_structuring.structuring_inference import get_semantic, get_procedural
