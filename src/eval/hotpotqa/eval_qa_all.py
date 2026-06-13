@@ -16,6 +16,7 @@ import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, "../.."))
 sys.path.append(parent_dir)
+sys.path.append(current_dir)
 
 from utils import wrapper_call_model,load_json,dump_json
 from utils import DEFAULT_LLM_NAME, DEFAULT_EMBEDDING_MODEL_NAME
