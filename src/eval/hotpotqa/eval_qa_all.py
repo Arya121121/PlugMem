@@ -6,6 +6,8 @@ import argparse
 import random
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional, Set
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -------------------------
 # Path bootstrap
@@ -229,6 +231,7 @@ def main():
     parser.add_argument("--max_qa_items", type=int, default=-1)
     parser.add_argument("--start_idx", type=int, default=0)
     parser.add_argument("--write_every", type=int, default=10)
+    parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--context_mode", type=str, default="retrieval",
@@ -417,10 +420,11 @@ def main():
     # ---- Resume: load existing predictions (if any) ----
     completed_ids: Set[str] = set()
     total_em, total_f1, n_done = 0.0, 0.0, 0
+    existing_records = []
     if (not no_write_gate) and os.path.exists(pred_path):
         with open(pred_path, "r", encoding="utf-8") as f:
-            existing_preds=json.load(f)
-        for obj in existing_preds:
+            existing_records=json.load(f)
+        for obj in existing_records:
             qid = obj.get("id", None)
             if qid is None:
                 continue
@@ -433,11 +437,14 @@ def main():
 
     # ---- Main Eval Loop ----
     n = n_done  # start from already done count
-    for idx_in_run, qa_item in enumerate(data):
+    state_lock = threading.Lock()
+    num_workers = args.num_workers
+
+    def process_item(idx_in_run, qa_item):
         qid = str(qa_item.get("_id", qa_item.get("id", str(idx_in_run))))
         if qid in completed_ids:
-            logger.info(f"Skipping completed id: {qid}")
-            continue
+            # logger.info(f"Skipping completed id: {qid}")
+            return None
 
         question = qa_item["question"]
         gold_ans = qa_item.get("answer", "")
@@ -508,7 +515,6 @@ def main():
                         messages_for_reasoning[1] = {
                             "role":"user", 
                             "content":messages_for_reasoning[1]["content"]+ \
-                                # f"\n\nIMPORTANT: \nMake sure your output is within the token budget of {reasoning_max_tokens} tokens! Adjust your output accordingly, if necessary, skip the reasoning process with a placeholder '<skipped>' and only output the extracted information part."
                                 f"\n\nIMPORTANT: \nMake sure the length of your output is approximately {reasoning_max_tokens} tokens! Adjust your output accordingly, if necessary, skip the reasoning process with a placeholder '<skipped>' and only output the extracted information part."
                         }
                         raw_reasoning_out = wrapper_call_model(model_name=qa_model_name, messages=messages_for_reasoning, max_tokens=reasoning_max_tokens)
@@ -519,7 +525,6 @@ def main():
                         reasoning_out = reasoning_out.strip()
                     logger.info(f"reasoning_info:\n{reasoning_out}")
                     rag_context = f"Relevant info: {reasoning_out}\n"
-                    # rag_context += f"Original retrieved memories:\n{retrieved_mem}".strip()
 
         elif context_mode == "oracle":
             _, rag_context = gold_context_str
@@ -538,10 +543,6 @@ def main():
 
         em = single_exact_match(pred, gold_ans) if gold_ans else 0.0
         f1 = single_f1_score(pred, gold_ans) if gold_ans else 0.0
-        total_em += em
-        total_f1 += f1
-        n += 1
-        completed_ids.add(qid)
 
         logger.info(f"----- gold_context -----:\n{gold_context_str}")
         logger.info(f"----- question -----: {question}")
@@ -563,23 +564,36 @@ def main():
             "reasoning_info": rag_context,
         }
         
-        if os.path.exists(pred_path): 
-            with open(pred_path, "r", encoding="utf-8") as fout: 
-                existing_records=json.load(fout) 
-        else: 
-            existing_records=[]     
-        existing_records.append(record) 
-        
-        if no_write_gate: 
-            pass 
-        else: 
-            with open(pred_path, "w", encoding="utf-8") as fout: 
-                json.dump(existing_records, fout, indent=4, ensure_ascii=False)
+        return record
 
-        if n % write_every == 0:
-            avg_em = total_em / n
-            avg_f1 = total_f1 / n
-            logger.info(f"[{n}/{len(data)}] EM={avg_em:.4f} F1={avg_f1:.4f}")
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(process_item, idx, qa_item): qa_item for idx, qa_item in enumerate(data)}
+        for future in as_completed(futures):
+            record = future.result()
+            if record is not None:
+                with state_lock:
+                    total_em += record["em"]
+                    total_f1 += record["f1"]
+                    n += 1
+                    completed_ids.add(record["id"])
+                    existing_records.append(record)
+                    
+                    if not no_write_gate:
+                        # Write periodically to save disk IO
+                        if n % write_every == 0:
+                            with open(pred_path, "w", encoding="utf-8") as fout:
+                                json.dump(existing_records, fout, indent=4, ensure_ascii=False)
+                            
+                    if n % write_every == 0:
+                        avg_em = total_em / n
+                        avg_f1 = total_f1 / n
+                        logger.info(f"[{n}/{len(data)}] EM={avg_em:.4f} F1={avg_f1:.4f}")
+
+    # Final save just in case
+    if not no_write_gate:
+        with state_lock:
+            with open(pred_path, "w", encoding="utf-8") as fout:
+                json.dump(existing_records, fout, indent=4, ensure_ascii=False)
 
     # ---- final metrics ----
     metrics = {

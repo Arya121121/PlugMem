@@ -88,6 +88,39 @@ def set_logger(
 # ----------------------------
 # LLM API
 # ----------------------------
+import threading
+import itertools
+
+_llm_clients = []
+_client_lock = threading.Lock()
+_client_cycle = None
+
+def get_llm_client():
+    global _llm_clients, _client_cycle
+    with _client_lock:
+        if not _llm_clients:
+            azure_endpoints_str = os.environ.get("AZURE_ENDPOINTS", os.environ.get("AZURE_ENDPOINT", ""))
+            base_urls_str = os.environ.get("OPENAI_BASE_URLS", os.environ.get("OPENAI_BASE_URL", ""))
+            api_keys_str = os.environ.get("OPENAI_API_KEYS", os.environ.get("OPENAI_API_KEY", ""))
+            
+            if azure_endpoints_str:
+                endpoints = [e.strip() for e in azure_endpoints_str.split(",") if e.strip()]
+                keys = [k.strip() for k in api_keys_str.split(",") if k.strip()] if api_keys_str else ["EMPTY"] * len(endpoints)
+                for i, ep in enumerate(endpoints):
+                    key = keys[i] if i < len(keys) else keys[-1] if keys else "EMPTY"
+                    _llm_clients.append(AzureOpenAI(azure_endpoint=ep, api_key=key, api_version="2024-12-01-preview"))
+            else:
+                urls = [u.strip() for u in base_urls_str.split(",") if u.strip()]
+                keys = [k.strip() for k in api_keys_str.split(",") if k.strip()] if api_keys_str else ["EMPTY"] * len(urls)
+                if not urls:
+                    _llm_clients.append(OpenAI())
+                else:
+                    for i, u in enumerate(urls):
+                        key = keys[i] if i < len(keys) else keys[-1] if keys else "EMPTY"
+                        _llm_clients.append(OpenAI(base_url=u, api_key=key))
+            _client_cycle = itertools.cycle(_llm_clients)
+        return next(_client_cycle)
+
 def wrapper_call_model(
     model_name: str = None,
     messages: List[Dict[str, str]] = None,
@@ -100,12 +133,8 @@ def wrapper_call_model(
 ) -> str:
     """Unified LLM caller. Two routes, picked from env:
 
-      1. Azure OpenAI — when AZURE_ENDPOINT is set. Uses OPENAI_API_KEY for
-         auth and AZURE_ENDPOINT for the base url.
-      2. OpenAI-compatible API — otherwise. The OpenAI SDK natively reads
-         OPENAI_BASE_URL and OPENAI_API_KEY from env, so any OpenAI-
-         compatible provider (vanilla OpenAI, OpenRouter, vLLM, etc.) works
-         by pointing OPENAI_BASE_URL at it.
+      1. Azure OpenAI — when AZURE_ENDPOINT/AZURE_ENDPOINTS is set. 
+      2. OpenAI-compatible API — otherwise. (OPENAI_BASE_URL/OPENAI_BASE_URLS)
 
     The model id is passed through verbatim — caller picks it via
     `model_name`, env var `LLM_NAME`, or falls back to `DEFAULT_LLM_NAME`.
@@ -123,21 +152,10 @@ def wrapper_call_model(
             {"role": "user", "content": prompt or ""},
         ]
 
-    azure_endpoint = os.environ.get("AZURE_ENDPOINT", None)
-    api_key = os.environ.get("OPENAI_API_KEY", None)
-    if azure_endpoint:
-        client = AzureOpenAI(
-            azure_endpoint=azure_endpoint,
-            api_key=api_key,
-            api_version="2024-12-01-preview",
-        )
-    else:
-        # OpenAI() picks up OPENAI_BASE_URL + OPENAI_API_KEY from env.
-        client = OpenAI()
-
     last_err = None
     for attempt in range(1, MAX_TRY + 1):
         try:
+            client = get_llm_client()
             response = client.chat.completions.create(
                 model=model_name,
                 messages=messages,

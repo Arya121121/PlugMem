@@ -283,7 +283,7 @@ class PlugMemClient:
     @property
     def semantic_nodes(self) -> List[DummySemanticNode]:
         try:
-            result = _get(f"/graphs/{self.graph_id}/nodes?node_type=semantic&limit=10000")
+            result = _get(f"/graphs/{self.graph_id}/nodes?node_type=semantic&limit=50000")
             nodes = result.get("nodes", [])
             return [
                 DummySemanticNode(
