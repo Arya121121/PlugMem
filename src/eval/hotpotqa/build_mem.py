@@ -125,6 +125,13 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: Optional[int],from_d
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         map_buffer.clear()
 
+    completed_indices = set()
+    if os.path.exists(MAP_PATH):
+        with open(MAP_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    completed_indices.add(json.loads(line)["corpus_idx"])
+
     with ThreadPoolExecutor(max_workers=num_workers) as ex:
         pending_set = set()
         next_i = 0  # corpus 内偏移
@@ -133,6 +140,9 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: Optional[int],from_d
         # 先填满窗口
         while next_i < corpus_len and len(pending_set) < chunk_size:
             idx = start_idx + next_i
+            if idx in completed_indices:
+                next_i += 1
+                continue
             future = ex.submit(_process_single_data, idx, corpus[next_i], EMBEDDING_MODEL)
             pending_set.add(future)
             next_i += 1
@@ -160,11 +170,15 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: Optional[int],from_d
                     flush_mapping()
 
                 # 补充提交新的任务，维持窗口大小
-                if next_i < corpus_len:
+                while next_i < corpus_len:
                     new_idx = start_idx + next_i
+                    if new_idx in completed_indices:
+                        next_i += 1
+                        continue
                     new_fut = ex.submit(_process_single_data, new_idx, corpus[next_i], EMBEDDING_MODEL)
                     pending_set.add(new_fut)
                     next_i += 1
+                    break
 
         flush_mapping()
 
