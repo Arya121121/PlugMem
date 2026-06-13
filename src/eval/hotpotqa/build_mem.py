@@ -8,6 +8,8 @@ import json
 import os
 import sys
 import traceback
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 import argparse
