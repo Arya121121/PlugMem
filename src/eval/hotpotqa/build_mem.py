@@ -167,7 +167,10 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: Optional[int],from_d
                 idx, memory = future.result()
                 if memory is not None:
                     sem_num_before = len(mg.semantic_nodes)
+                    t_save0 = time.time()
                     mg.insert_hpqa_ver(memory)
+                    t_save1 = time.time()
+                    logger.info(f"[Perf] Database Save for idx {idx} took {t_save1 - t_save0:.2f} seconds")
                     sem_num_after = len(mg.semantic_nodes)
 
                     if sem_num_after > sem_num_before:
