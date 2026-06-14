@@ -376,23 +376,32 @@ def get_embedding(text, embedding_model=None):
     errors: List[str] = []
     per_backend_tries = 3
 
-    # 1. self-hosted server
-    base_url = os.environ.get("EMBEDDING_BASE_URL")
-    if base_url:
-        model_id = embedding_model or "nvidia/NV-Embed-v2"
-        for attempt in range(1, per_backend_tries + 1):
-            try:
-                resp = requests.post(
-                    base_url,
-                    json={"model": model_id, "input": text},
-                    headers={"Content-Type": "application/json"},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                return resp.json()["data"][0]["embedding"]
-            except Exception as e:
-                errors.append(f"self-hosted attempt {attempt}: {repr(e)}")
-                time.sleep(2)
+    # 1. Load-balanced self-hosted servers
+    base_urls = [
+        "http://localhost:8555/v1/embeddings",
+        "http://localhost:8556/v1/embeddings"
+    ]
+    
+    # Simple round-robin based on a random choice to distribute load across workers
+    import random
+    target_url = random.choice(base_urls)
+    
+    model_id = embedding_model or "nvidia/NV-Embed-v2"
+    for attempt in range(1, per_backend_tries + 1):
+        try:
+            resp = requests.post(
+                target_url,
+                json={"model": model_id, "input": text},
+                headers={"Content-Type": "application/json"},
+                timeout=120, # increased timeout
+            )
+            resp.raise_for_status()
+            return resp.json()["data"][0]["embedding"]
+        except Exception as e:
+            errors.append(f"self-hosted ({target_url}) attempt {attempt}: {repr(e)}")
+            time.sleep(2)
+            # Try the other URL on retry
+            target_url = base_urls[0] if target_url == base_urls[1] else base_urls[1]
 
     # 2. third-party OpenAI-compatible API
     api_url = os.environ.get("EMBEDDING_API_BASE_URL")
