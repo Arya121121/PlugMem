@@ -6,6 +6,7 @@ and provides a ChromaDB EmbeddingFunction adapter.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import os
 import time
@@ -49,6 +50,7 @@ class HTTPEmbeddingClient(EmbeddingClient):
         timeout: int = 60,
     ):
         self.base_url = base_url
+        self._url_cycle = itertools.cycle([url.strip() for url in base_url.split(",") if url.strip()])
         self.model = model
         self.api_key = api_key
         self.max_text_len = max_text_len
@@ -65,8 +67,9 @@ class HTTPEmbeddingClient(EmbeddingClient):
 
         for attempt in range(1, self.max_retries + 1):
             try:
+                target_url = next(self._url_cycle)
                 response = requests.post(
-                    self.base_url, json=data, headers=headers, timeout=self.timeout,
+                    target_url, json=data, headers=headers, timeout=self.timeout,
                 )
                 response.raise_for_status()
                 result = response.json()
