@@ -57,21 +57,30 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
             }]
             memory.memory["episodic"] = episodic_memory
 
+            t0 = time.time()
             semantic_memory = get_semantic(
                 step={"observation": obs},
                 trajectory_num=0,
                 turn_num=0,
                 time=""
             )
+            t1 = time.time()
+            logger.info(f"[Perf] get_semantic for idx {idx} took {t1 - t0:.2f} seconds")
 
             memory.memory["semantic"] = semantic_memory
+            t2 = time.time()
             for sm in semantic_memory:
                 memory.memory_embedding["semantic"].append({
                     "semantic_memory": get_embedding(sm["semantic_memory"], emb_model),
                     "tags": [get_embedding(tag, emb_model) for tag in sm["tags"]]
                 })
+            t3 = time.time()
+            logger.info(f"[Perf] get_embedding (semantic) for idx {idx} took {t3 - t2:.2f} seconds")
 
+            t4 = time.time()
             procedural_memory, goal, _return = get_procedural(trajectory=obs)
+            t5 = time.time()
+            logger.info(f"[Perf] get_procedural for idx {idx} took {t5 - t4:.2f} seconds")
             memory.memory["procedural"].append({
                 "subgoal": goal,
                 "procedural_memory": procedural_memory,
@@ -80,10 +89,13 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
                 "return": _return,
             })
 
+            t6 = time.time()
             memory.memory_embedding["procedural"].append({
                 "procedural_memory": get_embedding(procedural_memory, emb_model),
                 "subgoal": get_embedding(goal, emb_model)
             })
+            t7 = time.time()
+            logger.info(f"[Perf] get_embedding (procedural) for idx {idx} took {t7 - t6:.2f} seconds")
             return idx,memory
 
         except Exception as e:
