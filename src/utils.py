@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Tuple, Set, Optional
 MAX_TRY=5
 MAX_EMBEDDING_INPUT_CHARS = 8192   # truncate text passed to any embedding backend
 DEFAULT_EMBEDDING_MODEL_NAME = "NV-Embed-v2"
-DEFAULT_LLM_NAME = "qwen-2.5-32b-instruct"
+DEFAULT_LLM_NAME = os.environ.get("LLM_MODEL", "qwen-2.5-32b-instruct")
 DEFAULT_LLM_NAME_ALIAS = ["qwen-2.5-32b-instruct",
                     "qwen2.5-32b-instruct",
                     "Qwen2.5-7B-Instruct",
