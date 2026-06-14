@@ -69,10 +69,29 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
 
             memory.memory["semantic"] = semantic_memory
             t2 = time.time()
+            all_semantic_texts = []
             for sm in semantic_memory:
+                all_semantic_texts.append(sm["semantic_memory"])
+                all_semantic_texts.extend(sm["tags"])
+            
+            if all_semantic_texts:
+                all_semantic_embeddings = get_embedding(all_semantic_texts, emb_model)
+            else:
+                all_semantic_embeddings = []
+                
+            emb_idx = 0
+            for sm in semantic_memory:
+                mem_emb = all_semantic_embeddings[emb_idx]
+                emb_idx += 1
+                
+                tags_emb = []
+                for _ in sm["tags"]:
+                    tags_emb.append(all_semantic_embeddings[emb_idx])
+                    emb_idx += 1
+                    
                 memory.memory_embedding["semantic"].append({
-                    "semantic_memory": get_embedding(sm["semantic_memory"], emb_model),
-                    "tags": [get_embedding(tag, emb_model) for tag in sm["tags"]]
+                    "semantic_memory": mem_emb,
+                    "tags": tags_emb
                 })
             t3 = time.time()
             logger.info(f"[Perf] get_embedding (semantic) for idx {idx} took {t3 - t2:.2f} seconds")
@@ -90,9 +109,11 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
             })
 
             t6 = time.time()
+            proc_texts = [procedural_memory, goal]
+            proc_embeddings = get_embedding(proc_texts, emb_model)
             memory.memory_embedding["procedural"].append({
-                "procedural_memory": get_embedding(procedural_memory, emb_model),
-                "subgoal": get_embedding(goal, emb_model)
+                "procedural_memory": proc_embeddings[0],
+                "subgoal": proc_embeddings[1]
             })
             t7 = time.time()
             logger.info(f"[Perf] get_embedding (procedural) for idx {idx} took {t7 - t6:.2f} seconds")
