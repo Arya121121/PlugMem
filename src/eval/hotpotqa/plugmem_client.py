@@ -41,7 +41,7 @@ def _post(path: str, body: Dict, timeout: Optional[int] = 300) -> Dict:
 def _get(path: str) -> Dict:
     url = f"{_BASE_URL}/api/v1{path}"
     try:
-        r = requests.get(url, headers=_headers(), timeout=10)
+        r = requests.get(url, headers=_headers(), timeout=180)
         r.raise_for_status()
         return r.json()
     except Exception as e:
