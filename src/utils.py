@@ -372,13 +372,7 @@ def get_embedding(text, embedding_model=None):
       3. Local model loaded via sentence-transformers (NV-Embed-v2 by
          default).
     """
-    if isinstance(text, str):
-        text = (text or "")[:MAX_EMBEDDING_INPUT_CHARS]
-    elif isinstance(text, list):
-        text = [ (t or "")[:MAX_EMBEDDING_INPUT_CHARS] for t in text ]
-    else:
-        text = str(text)[:MAX_EMBEDDING_INPUT_CHARS]
-    
+    text = (text or "")[:MAX_EMBEDDING_INPUT_CHARS]
     errors: List[str] = []
     per_backend_tries = 3
 
@@ -395,12 +389,7 @@ def get_embedding(text, embedding_model=None):
                     timeout=60,
                 )
                 resp.raise_for_status()
-                data = resp.json()["data"]
-                # Return the list of embeddings if input was a list, else return the single embedding
-                if isinstance(text, list):
-                    return [item["embedding"] for item in data]
-                else:
-                    return data[0]["embedding"]
+                return resp.json()["data"][0]["embedding"]
             except Exception as e:
                 errors.append(f"self-hosted attempt {attempt}: {repr(e)}")
                 time.sleep(2)
