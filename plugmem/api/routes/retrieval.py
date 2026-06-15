@@ -7,7 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException
 
 from plugmem.api.auth import require_api_key
-from plugmem.api.dependencies import get_graph_manager
+from plugmem.api.dependencies import get_graph_manager, api_lock
 from plugmem.api.schemas import (
     ConsolidateRequest,
     ConsolidateResponse,
@@ -34,8 +34,9 @@ def _write_audit(
 ) -> None:
     """Best-effort audit write — never breaks the recall path."""
     try:
-        graph.storage.add_recall(
-            graph.graph_id,
+        with api_lock:
+            graph.storage.add_recall(
+                graph.graph_id,
             endpoint=endpoint,
             ts=_now_iso(),
             graph_time=graph.semantic_time,

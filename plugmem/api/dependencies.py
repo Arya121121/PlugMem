@@ -18,6 +18,10 @@ from plugmem.clients.llm import LLMClient, OpenAICompatibleLLMClient
 from plugmem.clients.llm_router import LLMRouter
 from plugmem.config import PlugMemConfig
 from plugmem.graph_manager import GraphManager
+import threading
+
+api_lock = threading.Lock()
+
 from plugmem.storage.chroma import ChromaStorage
 
 logger = logging.getLogger(__name__)
