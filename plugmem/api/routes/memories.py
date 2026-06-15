@@ -20,7 +20,7 @@ def _manager() -> GraphManager:
 
 
 @router.post("/{graph_id}/memories", response_model=MemoryInsertResponse)
-async def insert_memories(graph_id: str, body: MemoryInsertRequest) -> MemoryInsertResponse:
+def insert_memories(graph_id: str, body: MemoryInsertRequest) -> MemoryInsertResponse:
     gm = _manager()
 
     try:

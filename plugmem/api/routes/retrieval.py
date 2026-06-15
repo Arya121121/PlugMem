@@ -72,7 +72,7 @@ def _get_graph(graph_id: str):
 
 
 @router.post("/{graph_id}/retrieve", response_model=RetrieveResponse)
-async def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
+def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
     graph = _get_graph(graph_id)
 
     audit: Dict[str, Any] = {}
@@ -112,7 +112,7 @@ async def retrieve(graph_id: str, body: RetrieveRequest) -> RetrieveResponse:
 
 
 @router.post("/{graph_id}/reason", response_model=ReasonResponse)
-async def reason(graph_id: str, body: ReasonRequest) -> ReasonResponse:
+def reason(graph_id: str, body: ReasonRequest) -> ReasonResponse:
     graph = _get_graph(graph_id)
 
     audit: Dict[str, Any] = {}
@@ -159,7 +159,7 @@ async def reason(graph_id: str, body: ReasonRequest) -> ReasonResponse:
 
 
 @router.post("/{graph_id}/consolidate", response_model=ConsolidateResponse)
-async def consolidate(graph_id: str, body: ConsolidateRequest) -> ConsolidateResponse:
+def consolidate(graph_id: str, body: ConsolidateRequest) -> ConsolidateResponse:
     graph = _get_graph(graph_id)
 
     stats = graph.update_semantic_subgraph(
