@@ -28,7 +28,7 @@ def _headers() -> Dict[str, str]:
     return h
 
 
-def _post(path: str, body: Dict, timeout: Optional[int] = 300) -> Dict:
+def _post(path: str, body: Dict, timeout: Optional[int] = 1200) -> Dict:
     url = f"{_BASE_URL}/api/v1{path}"
     try:
         r = requests.post(url, json=body, headers=_headers(), timeout=timeout)
