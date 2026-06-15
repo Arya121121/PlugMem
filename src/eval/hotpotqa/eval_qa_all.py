@@ -145,7 +145,7 @@ def multi_hop_retrieval_sem(
             observation=query_text,
             time=0,
             task_type=task_type,
-            # mode="semantic_memory",
+            mode="semantic_memory",
         )
         memory_str = variables.get(sel_type, "")
         

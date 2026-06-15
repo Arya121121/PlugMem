@@ -926,20 +926,24 @@ class MemoryGraph:
         import time as time_mod
         start_time = time_mod.perf_counter()
 
-        next_subgoal, query_tags = get_plan(
-            self.retrieval_llm, goal=goal, subgoal=subgoal, state=state, observation=observation,
-            prompts=self.prompts, graph_id=self.graph_id,
-        )
-        logger.info("query_tags: %s", query_tags)
+        if mode is not None:
+            next_subgoal, query_tags = "", []
+            if isinstance(mode, str):
+                mode = mode.replace("#", "").replace("*", "").strip()
+        else:
+            next_subgoal, query_tags = get_plan(
+                self.retrieval_llm, goal=goal, subgoal=subgoal, state=state, observation=observation,
+                prompts=self.prompts, graph_id=self.graph_id,
+            )
+            logger.info("query_tags: %s", query_tags)
 
-        if mode is None:
             mode = get_mode(
                 self.retrieval_llm, observation=observation, task_type=task_type,
                 prompts=self.prompts, graph_id=self.graph_id,
             )
-        logger.info("mode: %s", mode)
-        if isinstance(mode, str):
-            mode = mode.replace("#", "").replace("*", "").strip()
+            logger.info("mode: %s", mode)
+            if isinstance(mode, str):
+                mode = mode.replace("#", "").replace("*", "").strip()
 
         _reasoning_map = {
             "episodic_memory": ("reasoning_episodic", DefaultEpisodicPrompt),
