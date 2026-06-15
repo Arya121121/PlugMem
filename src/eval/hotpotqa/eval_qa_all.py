@@ -582,8 +582,11 @@ def main():
                     if not no_write_gate:
                         # Write periodically to save disk IO
                         if n % write_every == 0:
-                            with open(pred_path, "w", encoding="utf-8") as fout:
-                                json.dump(existing_records, fout, indent=4, ensure_ascii=False)
+                            try:
+                                with open(pred_path, "w", encoding="utf-8") as fout:
+                                    json.dump(existing_records, fout, indent=4, ensure_ascii=False)
+                            except Exception as e:
+                                logger.error(f"CRITICAL: Failed to save predictions to disk: {e}")
                             
                     if n % write_every == 0:
                         avg_em = total_em / n
@@ -593,8 +596,11 @@ def main():
     # Final save just in case
     if not no_write_gate:
         with state_lock:
-            with open(pred_path, "w", encoding="utf-8") as fout:
-                json.dump(existing_records, fout, indent=4, ensure_ascii=False)
+            try:
+                with open(pred_path, "w", encoding="utf-8") as fout:
+                    json.dump(existing_records, fout, indent=4, ensure_ascii=False)
+            except Exception as e:
+                logger.error(f"CRITICAL: Failed to perform final save: {e}")
 
     # ---- final metrics ----
     metrics = {
