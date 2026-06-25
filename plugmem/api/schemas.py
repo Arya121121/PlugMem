@@ -38,12 +38,24 @@ class TrajectoryStep(BaseModel):
 class SemanticMemoryInput(BaseModel):
     semantic_memory: str
     tags: List[str] = Field(default_factory=list)
+    embedding: Optional[List[float]] = Field(
+        None,
+        description="Pre-computed embedding vector. If provided, the server skips re-embedding.",
+    )
+    tag_embeddings: Optional[List[List[float]]] = Field(
+        None,
+        description="Pre-computed tag embedding vectors, one per tag.",
+    )
 
 
 class ProceduralMemoryInput(BaseModel):
     subgoal: str
     procedural_memory: str
     return_value: float = Field(0.0, alias="return")
+    subgoal_embedding: Optional[List[float]] = Field(
+        None,
+        description="Pre-computed subgoal embedding. If provided, the server skips re-embedding.",
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -164,6 +176,7 @@ class ConsolidateResponse(BaseModel):
     stats: Dict[str, int] = Field(default_factory=dict)
 
 
+# ------------------------------------------------------------------ #
 # ------------------------------------------------------------------ #
 # Stats / Nodes
 # ------------------------------------------------------------------ #

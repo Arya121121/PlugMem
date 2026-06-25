@@ -34,7 +34,7 @@ from memory_retrieving.value_longmemeval import (
     TagEqual, TagRelevant, SemanticEqual, SemanticRelevant,
     SubgoalEqual, SubgoalRelevant, ProceduralEqual, ProceduralRelevant
 )
-from utils import get_embedding
+from utils import get_embedding, get_embeddings_batch
 from funcs_eval import HOTPOTQA_CORPUS_PATH, MUSIQUE_CORPUS_PATH
 
 
@@ -68,19 +68,49 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
             logger.info(f"[Perf] get_semantic for idx {idx} took {t1 - t0:.2f} seconds")
 
             memory.memory["semantic"] = semantic_memory
-            t2 = time.time()
-            for sm in semantic_memory:
-                memory.memory_embedding["semantic"].append({
-                    "semantic_memory": get_embedding(sm["semantic_memory"], emb_model),
-                    "tags": [get_embedding(tag, emb_model) for tag in sm["tags"]]
-                })
-            t3 = time.time()
-            logger.info(f"[Perf] get_embedding (semantic) for idx {idx} took {t3 - t2:.2f} seconds")
+            # Collect all texts that need embedding in one flat list
+            all_texts = []
+            text_map = []  # track (type, semantic_idx, sub_idx_or_None)
+            for si, sm in enumerate(semantic_memory):
+                all_texts.append(sm["semantic_memory"])
+                text_map.append(("sem", si, None))
+                for ti, tag in enumerate(sm["tags"]):
+                    all_texts.append(tag)
+                    text_map.append(("tag", si, ti))
 
             t4 = time.time()
             procedural_memory, goal, _return = get_procedural(trajectory=obs)
-            t5 = time.time()
-            logger.info(f"[Perf] get_procedural for idx {idx} took {t5 - t4:.2f} seconds")
+            # Add procedural texts to the same batch
+            all_texts.append(procedural_memory)
+            text_map.append(("proc_mem", 0, None))
+            all_texts.append(goal)
+            text_map.append(("proc_goal", 0, None))
+
+            # Single batched GPU call for ALL embeddings
+            t_batch0 = time.time()
+            all_embeddings = get_embeddings_batch(all_texts, emb_model)
+            t_batch1 = time.time()
+            logger.info(f"[Perf] get_embeddings_batch for idx {idx} took {t_batch1 - t_batch0:.2f} seconds")
+
+            # Distribute embeddings back to their respective structures
+            sem_embeddings = {}  # si -> {"semantic_memory": emb, "tags": [emb, ...]}
+            proc_mem_emb = None
+            proc_goal_emb = None
+            for i, (kind, si, ti) in enumerate(text_map):
+                emb = all_embeddings[i]
+                if kind == "sem":
+                    sem_embeddings.setdefault(si, {"semantic_memory": None, "tags": []})
+                    sem_embeddings[si]["semantic_memory"] = emb
+                elif kind == "tag":
+                    sem_embeddings.setdefault(si, {"semantic_memory": None, "tags": []})
+                    sem_embeddings[si]["tags"].append(emb)
+                elif kind == "proc_mem":
+                    proc_mem_emb = emb
+                elif kind == "proc_goal":
+                    proc_goal_emb = emb
+
+            for si in range(len(semantic_memory)):
+                memory.memory_embedding["semantic"].append(sem_embeddings[si])
             memory.memory["procedural"].append({
                 "subgoal": goal,
                 "procedural_memory": procedural_memory,
@@ -91,8 +121,8 @@ def _process_single_data(idx: int, data: Dict[str, Any], emb_model: str, max_try
 
             t6 = time.time()
             memory.memory_embedding["procedural"].append({
-                "procedural_memory": get_embedding(procedural_memory, emb_model),
-                "subgoal": get_embedding(goal, emb_model)
+                "procedural_memory": proc_mem_emb,
+                "subgoal": proc_goal_emb
             })
             t7 = time.time()
             logger.info(f"[Perf] get_embedding (procedural) for idx {idx} took {t7 - t6:.2f} seconds")

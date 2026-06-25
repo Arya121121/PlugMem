@@ -135,6 +135,11 @@ class PlugMemClient:
             semantic = getattr(mem, "memory", {}).get("semantic", [])
             procedural = getattr(mem, "memory", {}).get("procedural", [])
 
+            # Pre-computed embeddings live in a separate dict on the Memory object
+            mem_embeddings = getattr(mem, "memory_embedding", {})
+            sem_embeddings = mem_embeddings.get("semantic", [])
+            proc_embeddings = mem_embeddings.get("procedural", [])
+
             # Normalize episodic to 2D list if it is a 1D list of dicts (HotpotQA format)
             if episodic and isinstance(episodic, (list, tuple)) and isinstance(episodic[0], dict):
                 episodic = [episodic]
@@ -158,20 +163,35 @@ class PlugMemClient:
 
                 # Build semantic nodes in structured format
                 semantic_payload = []
-                for s in semantic:
-                    semantic_payload.append({
+                for si, s in enumerate(semantic):
+                    sem_entry = {
                         "semantic_memory": str(s.get("semantic_memory", "") or ""),
                         "tags": [str(t) for t in s.get("tags", [])],
-                    })
+                    }
+                    # Try to get pre-computed embedding from memory_embedding first,
+                    # then fall back to inline embedding field
+                    if si < len(sem_embeddings) and sem_embeddings[si].get("semantic_memory") is not None:
+                        sem_entry["embedding"] = sem_embeddings[si]["semantic_memory"]
+                        if sem_embeddings[si].get("tags"):
+                            sem_entry["tag_embeddings"] = sem_embeddings[si]["tags"]
+                    elif s.get("embedding") is not None:
+                        sem_entry["embedding"] = s["embedding"]
+                    semantic_payload.append(sem_entry)
 
                 # Build procedural nodes in structured format
                 procedural_payload = []
-                for p in procedural:
-                    procedural_payload.append({
+                for pi, p in enumerate(procedural):
+                    proc_entry = {
                         "subgoal": str(p.get("subgoal", "") or ""),
                         "procedural_memory": str(p.get("procedural_memory", "") or ""),
                         "return": float(p.get("return", p.get("return_value", 0.0)) or 0.0),
-                    })
+                    }
+                    # Try to get pre-computed embedding from memory_embedding first
+                    if pi < len(proc_embeddings) and proc_embeddings[pi].get("subgoal") is not None:
+                        proc_entry["subgoal_embedding"] = proc_embeddings[pi]["subgoal"]
+                    elif p.get("embedding") is not None:
+                        proc_entry["subgoal_embedding"] = p["embedding"]
+                    procedural_payload.append(proc_entry)
 
                 body = {
                     "mode": "structured",
@@ -243,7 +263,6 @@ class PlugMemClient:
             body["semantic_k"] = getattr(self.semantic_relevant, "k")
         if hasattr(self.semantic_relevant, "value_threshold"):
             body["semantic_threshold"] = getattr(self.semantic_relevant, "value_threshold")
-
         result = _post(f"/graphs/{self.graph_id}/retrieve", body)
         messages  = result.get("reasoning_prompt", [])
         variables = result.get("variables", {})

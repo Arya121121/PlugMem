@@ -433,6 +433,77 @@ def get_embedding(text, embedding_model=None):
     )
 
 
+def get_embeddings_batch(texts: List[str], embedding_model=None) -> List[List[float]]:
+    """Embed a list of texts in a single GPU call.
+
+    Uses the same backend priority as get_embedding but sends the entire
+    list in one HTTP request, exploiting GPU batch parallelism.  Falls
+    back to sequential per-text calls when the backend does not support
+    batch input.
+
+    Returns a list of embedding vectors in the same order as *texts*.
+    """
+    if not texts:
+        return []
+
+    cleaned = [(t or "")[:MAX_EMBEDDING_INPUT_CHARS] for t in texts]
+    errors: List[str] = []
+    per_backend_tries = 3
+
+    # 1. self-hosted server (supports array input natively)
+    base_url = os.environ.get("EMBEDDING_BASE_URL")
+    if base_url:
+        model_id = embedding_model or "nvidia/NV-Embed-v2"
+        for attempt in range(1, per_backend_tries + 1):
+            try:
+                resp = requests.post(
+                    base_url,
+                    json={"model": model_id, "input": cleaned},
+                    headers={"Content-Type": "application/json"},
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                data = resp.json()["data"]
+                # Sort by index to guarantee order matches input
+                data.sort(key=lambda d: d["index"])
+                return [d["embedding"] for d in data]
+            except Exception as e:
+                errors.append(f"self-hosted batch attempt {attempt}: {repr(e)}")
+                time.sleep(2)
+
+    # 2. third-party OpenAI-compatible API
+    api_url = os.environ.get("EMBEDDING_API_BASE_URL")
+    api_key = os.environ.get("EMBEDDING_API_KEY")
+    if api_url and api_key:
+        model_id = (embedding_model
+                    or os.environ.get("EMBEDDING_MODEL_NAME")
+                    or DEFAULT_EMBEDDING_MODEL_NAME)
+        for attempt in range(1, per_backend_tries + 1):
+            try:
+                client = OpenAI(base_url=api_url, api_key=api_key)
+                resp = client.embeddings.create(model=model_id, input=cleaned)
+                # Sort by index to guarantee order
+                sorted_data = sorted(resp.data, key=lambda d: d.index)
+                return [list(d.embedding) for d in sorted_data]
+            except Exception as e:
+                errors.append(f"third-party API batch attempt {attempt}: {repr(e)}")
+                time.sleep(2)
+
+    # 3. local fallback (sequential)
+    try:
+        return [
+            _get_embedding_local(t, model_name=embedding_model or "nvidia/NV-Embed-v2")
+            for t in cleaned
+        ]
+    except Exception as e:
+        errors.append(f"local batch: {repr(e)}")
+
+    raise RuntimeError(
+        "get_embeddings_batch failed for all backends. Errors:\n  "
+        + "\n  ".join(errors)
+    )
+
+
 # ----------------------------
 # MemGraph Operations
 # ----------------------------

@@ -102,9 +102,15 @@ def _insert_structured(graph, body: MemoryInsertRequest) -> MemoryInsertResponse
                 "semantic_memory": sem.semantic_memory,
                 "tags": sem.tags,
             })
+            # Use pre-computed embeddings if provided, otherwise fall back to embedder
+            sem_emb = sem.embedding if sem.embedding is not None else embedder.embed(sem.semantic_memory)
+            if sem.tag_embeddings is not None and len(sem.tag_embeddings) == len(sem.tags):
+                tag_embs = sem.tag_embeddings
+            else:
+                tag_embs = [embedder.embed(tag) for tag in sem.tags]
             mem.memory_embedding["semantic"].append({
-                "semantic_memory": embedder.embed(sem.semantic_memory),
-                "tags": [embedder.embed(tag) for tag in sem.tags],
+                "semantic_memory": sem_emb,
+                "tags": tag_embs,
             })
 
     # Procedural: embed subgoal
@@ -116,8 +122,10 @@ def _insert_structured(graph, body: MemoryInsertRequest) -> MemoryInsertResponse
                 "time": graph.semantic_time,
                 "return": proc.return_value,
             })
+            # Use pre-computed embedding if provided, otherwise fall back to embedder
+            subgoal_emb = proc.subgoal_embedding if proc.subgoal_embedding is not None else embedder.embed(proc.subgoal)
             mem.memory_embedding["procedural"].append({
-                "subgoal": embedder.embed(proc.subgoal),
+                "subgoal": subgoal_emb,
             })
 
     graph.insert(mem)
