@@ -196,12 +196,12 @@ def concurrent_main(mg: MemoryGraph,start_idx: int,end_idx: Optional[int],from_d
             for future in done:
                 idx, memory = future.result()
                 if memory is not None:
-                    sem_num_before = len(mg.semantic_nodes)
+                    sem_num_before = mg.get_stats().get("semantic", 0)
                     t_save0 = time.time()
                     mg.insert_hpqa_ver(memory)
                     t_save1 = time.time()
                     logger.info(f"[Perf] Database Save for idx {idx} took {t_save1 - t_save0:.2f} seconds")
-                    sem_num_after = len(mg.semantic_nodes)
+                    sem_num_after = mg.get_stats().get("semantic", 0)
 
                     if sem_num_after > sem_num_before:
                         map_buffer.append({
@@ -255,9 +255,9 @@ def main( mg: MemoryGraph, start_idx: int, end_idx: Optional[int], from_disk_onl
         
         if memory is not None:
             
-            sem_num_before = len(mg.semantic_nodes)
+            sem_num_before = mg.get_stats().get("semantic", 0)
             mg.insert_hpqa_ver(memory)
-            sem_num_after = len(mg.semantic_nodes)
+            sem_num_after = mg.get_stats().get("semantic", 0)
             logger.info(f"insert new memory for item {idx}")
             
             # Save mapping if new semantic nodes were added
